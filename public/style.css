@@ -1,0 +1,99 @@
+:root {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --text: #14213d;
+  --muted: #5b6577;
+  --accent: #0b6e4f;
+  --accent-text: #ffffff;
+  --border: #d9dee8;
+  --ok: #0b6e4f;
+  --err: #b42318;
+  --pending: #9a6700;
+  --code-bg: #0f172a;
+  --code-text: #e2e8f0;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  justify-content: center;
+  padding: 24px 16px;
+}
+main { width: 100%; max-width: 560px; }
+header { position: relative; }
+header h1 { margin: 0 0 4px; font-size: 1.4rem; padding-right: 96px; }
+header .sub { margin: 0 0 20px; color: var(--muted); }
+h2 { font-size: 1.05rem; margin: 16px 0 8px; }
+.langbar { position: absolute; top: 0; right: 0; display: flex; gap: 4px; }
+button.lang {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer;
+}
+button.lang[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+section {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px; margin-bottom: 16px; text-align: center;
+}
+section h2:first-child { margin-top: 0; }
+button, .btn-link { font: inherit; }
+#reset-btn, #cancel-btn, #enlarge-btn, #overlay-close {
+  background: var(--accent); color: var(--accent-text); border: 0;
+  padding: 12px 20px; border-radius: 8px; font-size: 1rem; cursor: pointer; margin-top: 12px;
+}
+button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+#enlarge-btn, #cancel-btn { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+.cards { display: grid; gap: 12px; }
+button.card {
+  text-align: left; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; padding: 16px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px; font-size: 0.95rem;
+}
+button.card:hover, button.card:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); }
+button.card span { color: var(--muted); font-size: 0.88rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 8px 0; }
+.scan { font-weight: 600; margin: 8px 0; }
+.btn-link { color: var(--accent); font-weight: 600; }
+
+/* QR: always white, large, crisp. The SVG carries its own 4-module quiet zone,
+   so no extra padding is added that would shrink the code. */
+.qr-wrap { display: flex; justify-content: center; margin: 8px 0; }
+#qr-img {
+  width: min(88vw, 360px);
+  height: min(88vw, 360px);
+  background: #fff;
+  image-rendering: pixelated; /* never smooth module edges */
+  border: 1px solid var(--border);
+}
+.overlay {
+  position: fixed; inset: 0; background: #fff; z-index: 10;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+}
+.overlay[hidden] { display: none; }
+#qr-big { width: min(96vw, 80vh); height: min(96vw, 80vh); image-rendering: pixelated; }
+
+.badge { display: inline-block; padding: 6px 14px; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 8px; }
+.badge.pending { background: #fff4d6; color: var(--pending); }
+.badge.ok { background: #d9f2e6; color: var(--ok); }
+.badge.err { background: #fde4e1; color: var(--err); }
+.error { color: var(--err); font-size: 0.9rem; word-break: break-word; }
+
+dl { text-align: left; margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+dt { color: var(--muted); }
+dd { margin: 0; font-weight: 600; word-break: break-word; }
+.checks { list-style: none; padding: 0; margin: 0; text-align: left; font-size: 0.9rem; }
+.checks li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.checks .st { font-weight: 700; min-width: 7.5em; }
+.checks .passed { color: var(--ok); }
+.checks .failed { color: var(--err); }
+.checks .skipped { color: var(--muted); }
+.checks .detail { flex-basis: 100%; color: var(--err); font-size: 0.8rem; word-break: break-word; }
+
+pre { text-align: left; background: var(--code-bg); color: var(--code-text); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.75rem; max-height: 320px; }
+textarea { width: 100%; height: 90px; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 0.75rem; }
+footer { color: var(--muted); font-size: 0.75rem; text-align: center; margin-top: 16px; }
+details { margin-top: 12px; text-align: left; }
+summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+[hidden] { display: none !important; }

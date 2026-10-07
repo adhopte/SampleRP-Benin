@@ -1,0 +1,23 @@
+{
+  "name": "sample-rp-benin",
+  "version": "1.0.0",
+  "description": "Sample OpenID4VP Relying Party (verifier) for Benin: PID and Birth Certificate attestation (mdoc), bilingual EN/FR",
+  "main": "server.js",
+  "type": "commonjs",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "mock-wallet": "node tools/mock-wallet.js",
+    "gen-cert": "node tools/gen-rp-cert.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cbor-x": "^1.5.9",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
+  }
+}

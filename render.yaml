@@ -1,0 +1,13 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: sample-rp-benin
+    runtime: node
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: BASE_URL
+        sync: false   # set to https://<your-service>.onrender.com after the first deploy
+      - key: QR_MODE
+        value: reference

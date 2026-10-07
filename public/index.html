@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sample Relying Party – Benin</title>
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div class="langbar" role="group" aria-label="Language / Langue">
+        <button type="button" class="lang" data-lang="en">EN</button>
+        <button type="button" class="lang" data-lang="fr">FR</button>
+      </div>
+      <h1 data-i18n="title"></h1>
+      <p class="sub" data-i18n="subtitle"></p>
+    </header>
+
+    <section id="start-panel">
+      <h2 data-i18n="choose"></h2>
+      <div class="cards">
+        <button type="button" class="card" data-profile="pid">
+          <strong data-i18n="pid_title"></strong>
+          <span data-i18n="pid_desc"></span>
+        </button>
+        <button type="button" class="card" data-profile="birth_certificate">
+          <strong data-i18n="bc_title"></strong>
+          <span data-i18n="bc_desc"></span>
+        </button>
+      </div>
+    </section>
+
+    <section id="qr-panel" hidden>
+      <div id="status-badge" class="badge pending" data-i18n="waiting"></div>
+      <p class="scan" data-i18n="scan"></p>
+      <div class="qr-wrap"><img id="qr-img" alt="QR code" /></div>
+      <button type="button" id="enlarge-btn" class="secondary" data-i18n="enlarge"></button>
+      <p class="hint" data-i18n="tip"></p>
+      <p class="hint"><span data-i18n="same_device"></span>:
+        <a id="wallet-link" class="btn-link" href="#" data-i18n="open_wallet"></a></p>
+      <details>
+        <summary data-i18n="raw"></summary>
+        <textarea id="raw-uri" readonly></textarea>
+      </details>
+      <button type="button" id="cancel-btn" class="secondary" data-i18n="cancel"></button>
+    </section>
+
+    <section id="result-panel" hidden>
+      <div id="result-badge" class="badge"></div>
+      <p id="result-error" class="error" hidden></p>
+      <h2 data-i18n="presented"></h2>
+      <dl id="claims-out"></dl>
+      <h2 data-i18n="checks"></h2>
+      <ul id="checks-out" class="checks"></ul>
+      <details>
+        <summary data-i18n="debug"></summary>
+        <pre id="debug-out"></pre>
+      </details>
+      <button type="button" id="reset-btn" data-i18n="again"></button>
+    </section>
+
+    <footer><p data-i18n="footer"></p></footer>
+  </main>
+
+  <div id="qr-overlay" class="overlay" hidden>
+    <img id="qr-big" alt="QR code" />
+    <button type="button" id="overlay-close" data-i18n="close"></button>
+  </div>
+
+  <script src="/i18n.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

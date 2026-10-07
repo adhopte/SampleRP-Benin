@@ -174,7 +174,8 @@ app.get('/api/session/:id', (req, res) => {
   });
 });
 
-app.get('/health', (req, res) =>
+// /healthz is Render's default health-check path; /health is the documented one.
+app.get(['/health', '/healthz'], (req, res) =>
   res.json({ ok: true, baseUrl: config.baseUrl, qrMode: config.qrMode, queryLanguage: config.queryLanguage })
 );
 

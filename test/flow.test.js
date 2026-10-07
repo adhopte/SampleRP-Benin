@@ -76,3 +76,13 @@ test('birth certificate flow + tampered response is rejected + replay refused', 
 });
 
 test.after(() => shared && shared.close());
+
+test('health endpoints answer on /health and /healthz (Render default)', async () => {
+  const server = await boot();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const p of ['/health', '/healthz']) {
+    const r = await fetch(base + p);
+    assert.strictEqual(r.status, 200, p);
+    assert.strictEqual((await r.json()).ok, true);
+  }
+});

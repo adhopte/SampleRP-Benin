@@ -19,6 +19,7 @@
     document.title = t('title');
     document.querySelectorAll('[data-i18n]').forEach((n) => { n.textContent = t(n.dataset.i18n); });
     document.querySelectorAll('button.lang').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
+    renderCards();
     if (lastSession) renderResult(lastSession);
   }
   document.querySelectorAll('button.lang').forEach((b) =>
@@ -28,6 +29,28 @@
       applyLang();
     })
   );
+
+  // ---- Profile cards (from the backend, so profiles.js is the single source) ----
+  let profileList = [];
+  const cards = $('cards');
+  function renderCards() {
+    cards.replaceChildren();
+    for (const p of profileList) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'card';
+      const strong = document.createElement('strong');
+      strong.textContent = p.title[lang] || p.title.en;
+      const span = document.createElement('span');
+      span.textContent = p.description[lang] || p.description.en;
+      const fmt = document.createElement('small');
+      fmt.textContent = p.format === 'mso_mdoc' ? 'mdoc' : 'SD-JWT VC';
+      b.append(strong, span, fmt);
+      b.addEventListener('click', () => startSession(p.id));
+      cards.append(b);
+    }
+  }
+  fetch('/api/profiles').then((r) => r.json()).then((l) => { profileList = l; renderCards(); });
 
   // ---- Flow ---------------------------------------------------------------
   let pollTimer = null;
@@ -72,6 +95,15 @@
 
   function stop() { clearInterval(pollTimer); pollTimer = null; }
 
+  // ISO/IEC 5218 sex codes, booleans and arrays, shown readably.
+  const SEX = { 0: { en: 'Not known', fr: 'Inconnu' }, 1: { en: 'Male', fr: 'Masculin' }, 2: { en: 'Female', fr: 'Féminin' }, 9: { en: 'Not applicable', fr: 'Non applicable' } };
+  function display(key, v) {
+    if (key === 'gender' && SEX[v]) return `${SEX[v][lang]} (${v})`;
+    if (typeof v === 'boolean') return v ? (lang === 'fr' ? 'Oui' : 'Yes') : (lang === 'fr' ? 'Non' : 'No');
+    if (Array.isArray(v)) return v.join(', ');
+    return typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v);
+  }
+
   function renderResult(s) {
     el.qr.hidden = true;
     el.overlay.hidden = true;
@@ -86,11 +118,13 @@
     el.checks.replaceChildren();
     for (const r of s.results || []) {
       for (const ns of Object.values(r.claims)) {
-        for (const [k, v] of Object.entries(ns)) {
+        // requested claims first (in request order), then the rest (e.g. issuer metadata)
+        const order = (k) => { const i = (s.requested || []).indexOf(k); return i < 0 ? 999 : i; };
+        for (const [k, v] of Object.entries(ns).sort((a, b) => order(a[0]) - order(b[0]))) {
           const dt = document.createElement('dt');
           dt.textContent = (s.labels[k] && s.labels[k][lang]) || k;
           const dd = document.createElement('dd');
-          dd.textContent = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          dd.textContent = display(k, v);
           el.claims.append(dt, dd);
         }
       }
@@ -120,7 +154,6 @@
     lastSession = null;
   }
 
-  document.querySelectorAll('button.card').forEach((b) => b.addEventListener('click', () => startSession(b.dataset.profile)));
   $('reset-btn').addEventListener('click', reset);
   $('cancel-btn').addEventListener('click', reset);
   $('enlarge-btn').addEventListener('click', () => { el.overlay.hidden = false; });

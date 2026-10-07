@@ -8,11 +8,12 @@
  *   node tools/mock-wallet.js --base http://localhost:3000 --profile pid
  *
  * It resolves the request (by value or by request_uri), builds a synthetic
- * signed mdoc DeviceResponse for the requested doctype and POSTs it to the
+ * signed mdoc DeviceResponse or SD-JWT presentation for what was requested (only the
+ * requested claims are disclosed) and POSTs it to the
  * response_uri exactly like a wallet would (direct_post, form-encoded).
  */
 
-const { createTestIssuer, buildDeviceResponse, SAMPLE_DATA } = require('./mdoc-builder');
+const { createTestIssuer, buildDeviceResponse, buildSdJwtPresentation, SAMPLE_DATA } = require('./mdoc-builder');
 const { profiles } = require('../src/profiles');
 
 function decodeJwtPayload(jwt) {
@@ -34,33 +35,65 @@ async function resolveRequest(link) {
   return params;
 }
 
-function requestedDoctype(params) {
-  if (params.dcql_query) return params.dcql_query.credentials[0].meta.doctype_value;
-  return params.presentation_definition.input_descriptors[0].id;
+/**
+ * What the request asks for, independent of PEX/DCQL:
+ *   { format: 'mso_mdoc'|'sd-jwt', id: doctype|vct, claims: [names] }
+ */
+function parseRequest(params) {
+  if (params.dcql_query) {
+    const c = params.dcql_query.credentials[0];
+    const mdoc = c.format === 'mso_mdoc';
+    return {
+      format: mdoc ? 'mso_mdoc' : 'sd-jwt',
+      id: mdoc ? c.meta.doctype_value : c.meta.vct_values[0],
+      claims: c.claims.map((x) => x.path[x.path.length - 1]),
+      descriptorId: c.id, descriptorFormat: c.format
+    };
+  }
+  const d = params.presentation_definition.input_descriptors[0];
+  const mdoc = 'mso_mdoc' in d.format;
+  const paths = d.constraints.fields.map((f) => f.path[0]);
+  return {
+    format: mdoc ? 'mso_mdoc' : 'sd-jwt',
+    id: mdoc ? d.id : d.constraints.fields.find((f) => f.path[0] === '$.vct').filter.const,
+    claims: paths.filter((p) => p !== '$.vct').map((p) => p.match(/\['([^']+)'\]$|^\$\.(.+)$/).slice(1).find(Boolean)),
+    descriptorId: d.id, descriptorFormat: mdoc ? 'mso_mdoc' : 'vc+sd-jwt'
+  };
 }
 
 /**
  * @param {string} link   openid4vp:// link from the QR code
- * @param {object} opts   { tamper: boolean, issuer, elements }
+ * @param {object} opts   { tamper: boolean, issuer }
  */
 async function presentToRp(link, opts = {}) {
   const params = await resolveRequest(link);
-  const doctype = requestedDoctype(params);
-  const profile = Object.values(profiles).find((p) => p.doctype === doctype);
-  if (!profile) throw new Error(`mock wallet has no sample data for doctype ${doctype}`);
+  const req = parseRequest(params);
+  const profile = Object.values(profiles).find((p) =>
+    p.format === req.format && (req.format === 'mso_mdoc' ? p.doctype === req.id : p.vct === req.id));
+  if (!profile) throw new Error(`mock wallet has no sample data for ${req.format} ${req.id}`);
 
-  const elements = { ...(opts.elements || SAMPLE_DATA[profile.id]) };
   const issuer = opts.issuer || createTestIssuer();
-  const token = buildDeviceResponse({
-    docType: doctype, namespace: profile.namespace, elements, issuer, tamper: opts.tamper
-  });
+  let token;
+  if (req.format === 'mso_mdoc') {
+    const elements = profile.credential === 'pid' ? SAMPLE_DATA.pid : SAMPLE_DATA.birth_certificate.claims;
+    token = buildDeviceResponse({
+      docType: req.id, namespace: profile.namespace, elements, disclose: req.claims, issuer, tamper: opts.tamper
+    });
+  } else {
+    token = buildSdJwtPresentation({
+      vct: req.id, ...SAMPLE_DATA.birth_certificate, disclose: req.claims, issuer,
+      aud: params.client_id, nonce: params.nonce, tamper: opts.tamper
+    });
+  }
 
-  const body = new URLSearchParams({ vp_token: token, state: params.state });
+  // DCQL (OpenID4VP 1.0): vp_token is a JSON object keyed by the query credential id.
+  const vpToken = params.dcql_query ? JSON.stringify({ [req.descriptorId]: [token] }) : token;
+  const body = new URLSearchParams({ vp_token: vpToken, state: params.state });
   if (params.presentation_definition) {
     body.set('presentation_submission', JSON.stringify({
       id: 'sub-1',
       definition_id: params.presentation_definition.id,
-      descriptor_map: [{ id: doctype, format: 'mso_mdoc', path: '$' }]
+      descriptor_map: [{ id: req.descriptorId, format: req.descriptorFormat, path: '$' }]
     }));
   }
   const res = await fetch(params.response_uri, { method: 'POST', body });

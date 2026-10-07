@@ -3,6 +3,8 @@
 **Languages:** English · [Français](../fr/01-guide-pid-mdoc.md)
 [Overview](00-overview.md) · **PID guide** · [Birth certificate guide](02-birth-certificate-guide.md) · [QR, troubleshooting, production](03-qr-troubleshooting-production.md)
 
+> **Source of truth: the Benin PID / Birth Certificate Rulebook v1.1 (standard-namespace edition).** The PID is an **mdoc** whose docType and namespace are both the standard `eu.europa.ec.eudi.pid.1` – there is **no Benin-specific namespace or claim**; Benin content (`issuing_authority` = `ANIP`, `issuing_country` = `BJ`, Beninese names and places) is carried in the *values*. The PID SD-JWT is out of scope.
+
 **Goal:** add a "Verify with my wallet" button to your website that asks the citizen for **family name, given name(s) and date of birth** from their national digital ID (PID, ISO 18013-5 **mdoc**), and receives a **verified** answer on your server.
 
 Time: ~30 minutes with the mock wallet, then a real wallet test.
@@ -12,7 +14,8 @@ Time: ~30 minutes with the mock wallet, then a real wallet test.
 | Format | `mso_mdoc` |
 | `doctype` | `eu.europa.ec.eudi.pid.1` |
 | Namespace | `eu.europa.ec.eudi.pid.1` |
-| Elements requested | `family_name`, `given_name`, `birth_date` |
+| Elements requested (profile `pid`) | `family_name`, `given_name`, `birth_date` – the rulebook's *Identity verification* use case |
+| Elements requested (profile `pid_age_over_18`) | `age_over_18` – the *Age > 18* use case |
 | Flow | OpenID4VP, `response_mode=direct_post` |
 
 ---
@@ -21,26 +24,20 @@ Time: ~30 minutes with the mock wallet, then a real wallet test.
 
 - [ ] Node.js 18+ and the sample running: follow the [quick start](00-overview.md#2-quick-start-5-minutes-no-wallet-needed).
 - [ ] A public HTTPS URL for the backend ([§3 of the overview](00-overview.md#3-make-it-reachable-by-a-real-wallet)).
-- [ ] The wallet you will test with, and the **doctype/namespace/element names** your issuer uses for the PID. The values above are the EU PID defaults; if your issuer differs, set `PID_DOCTYPE` / `PID_NAMESPACE` in `.env`.
+- [ ] The wallet you will test with. Identifiers are fixed by the rulebook; override `PID_DOCTYPE` / `PID_NAMESPACE` in `.env` only if the ecosystem changes them.
 
 ---
 
 ## Step 1 – Decide what to ask (data minimisation)
 
-Open `src/profiles.js`. The PID profile is the only place that describes the credential:
+Open `src/profiles.js`. The PID profiles are the only place that describes what is asked:
 
 ```js
-pid: {
-  id: 'pid',
-  doctype: 'eu.europa.ec.eudi.pid.1',
-  namespace: 'eu.europa.ec.eudi.pid.1',
-  format: 'mso_mdoc',
-  requested: ['family_name', 'given_name', 'birth_date'],   // ← ask ONLY what you need
-  labels: { ... }  // EN/FR names shown in the result screen
-}
+pid: pid('pid', ['family_name', 'given_name', 'birth_date'], /* title, description */),        // Identity verification
+pid_age_over_18: pid('pid_age_over_18', ['age_over_18'], /* title, description */),            // Age > 18
 ```
 
-Ask for the **minimum** your service needs. For an "over 18" gate, prefer a yes/no element such as `age_over_18` (if your issuer provides it) rather than the birth date. Every element you add appears on the citizen's consent screen. Elements are sent with `intent_to_retain: false`; set it to `true` only if you really store the value, and tell the citizen why.
+Ask for the **minimum** your service needs – the rulebook's Verifier Matrix says to **prefer `age_over_18` rather than `birth_date`** for an age gate, and to request `nationality` only if needed and `personal_administrative_number` (high sensitivity) only if required; `portrait` and `resident_address` are *not requested by default*. Elements you can request (rulebook "PID mdoc" tab): `family_name`, `family_name_birth`, `given_name`, `birth_date`, `age_over_18`, `age_over_NN`, `age_in_years`, `age_birth_year`, `birth_place`, `birth_country`, `birth_state`, `birth_city`, `resident_address`, `nationality`, `gender`, `portrait`, `document_number`, `issuance_date`, `expiry_date`, `issuing_authority`, `issuing_country`, `personal_administrative_number`. Add a new claim to `requested` and make sure it has EN/FR labels in `src/labels.js`. Every element you add appears on the citizen's consent screen. Elements are sent with `intent_to_retain: false`; set it to `true` only if you really store the value, and tell the citizen why.
 
 ---
 
@@ -178,6 +175,7 @@ The sample answers `200 {}` on success and `400 {"error":"invalid_request", …}
 | `issuer_trust` | That certificate chains to **an issuer you trust** (IACA in `TRUSTED_ISSUER_CERTS_DIR`) | unknown issuer. *Skipped* when no anchors are configured |
 | `validity` | `validFrom ≤ now ≤ validUntil` | expired / not yet valid |
 | `requested_elements` | All requested elements were returned | the wallet withheld one |
+| `status` | *Not performed* – revocation/status (rulebook: "validate … status") is reported as skipped | – |
 | `device_auth` | *Not performed by the sample* – holder binding | – |
 
 > **A credential is only as trustworthy as `issuer_trust`.** Without configured trust anchors the sample reports the signature as valid but **cannot know who signed**; anyone could present a self-made mdoc. Get the issuer's root certificate(s) and set `TRUSTED_ISSUER_CERTS_DIR` + `ALLOW_UNTRUSTED_ISSUER=false` before trusting results.
@@ -209,7 +207,7 @@ The page polls `GET /api/session/:id`. A verified result looks like:
   "results": [{
     "docType": "eu.europa.ec.eudi.pid.1",
     "claims": { "eu.europa.ec.eudi.pid.1": {
-      "family_name": "TEST-DOSSOU", "given_name": "Test Adjovi", "birth_date": "1990-05-12" } },
+      "family_name": "KOSSI", "given_name": "Jean", "birth_date": "1990-05-12" } },
     "checks": [
       { "id": "doctype", "status": "passed" },
       { "id": "digests", "status": "passed" },
@@ -217,6 +215,7 @@ The page polls `GET /api/session/:id`. A verified result looks like:
       { "id": "issuer_trust", "status": "skipped", "detail": "no trust anchors configured" },
       { "id": "validity", "status": "passed" },
       { "id": "requested_elements", "status": "passed" },
+      { "id": "status", "status": "skipped" },
       { "id": "device_auth", "status": "skipped" }
     ]
   }]
@@ -232,7 +231,7 @@ The page polls `GET /api/session/:id`. A verified result looks like:
 ## Step 8 – Test
 
 1. **Unit/flow tests:** `npm test`.
-2. **Mock wallet** (no phone): `npm run mock-wallet -- --profile pid`; add `--tamper` to confirm a modified value is **rejected** (`digests: failed`).
+2. **Mock wallet** (no phone): `npm run mock-wallet -- --profile pid` (or `pid_age_over_18`; the mock discloses only what is requested, with fictitious Benin-style values); add `--tamper` to confirm a modified value is **rejected** (`digests: failed`).
 3. **Real wallet:** deploy/tunnel with a public `BASE_URL`, open the page *via that URL*, scan the QR with the wallet. If the wallet shows an error before the consent screen, use the [troubleshooting table](03-qr-troubleshooting-production.md#2-troubleshooting).
 4. **Check what your issuer really sends:** if `doctype` or `requested_elements` fail, open *Technical details (JSON)* – it shows the `docType` and element names the wallet returned. Align `src/profiles.js` (or the `PID_*` variables) with them.
 

@@ -10,6 +10,7 @@
  *   - issuer_trust       : x5c chain validates to a configured trust anchor (IACA)
  *   - validity           : MSO validityInfo (validFrom <= now <= validUntil)
  *   - requested_elements : all requested data elements were returned
+ *   - status             : NOT performed (revocation/status list) - reported as skipped
  *   - device_auth        : NOT performed by this sample (see docs, "Going further")
  */
 
@@ -50,35 +51,7 @@ const COSE_ALGS = {
   [-36]: { hash: 'sha512', name: 'ES512' }
 };
 
-const pass = (id, detail) => ({ id, status: 'passed', detail });
-const fail = (id, detail) => ({ id, status: 'failed', detail });
-const skip = (id, detail) => ({ id, status: 'skipped', detail });
-
-function loadTrustAnchors(pems) {
-  return pems.map((p) => new crypto.X509Certificate(p));
-}
-
-function certList(x5c) {
-  const arr = Array.isArray(x5c) ? x5c : [x5c];
-  return arr.filter(Boolean).map((b) => new crypto.X509Certificate(Buffer.from(b)));
-}
-
-function checkChain(chain, anchors, now) {
-  if (!anchors.length) return skip('issuer_trust', 'no trust anchors configured (TRUSTED_ISSUER_CERTS_DIR)');
-  const within = (c) => new Date(c.validFrom) <= now && now <= new Date(c.validTo);
-  for (let i = 0; i < chain.length; i++) {
-    if (!within(chain[i])) return fail('issuer_trust', `certificate ${i} outside its validity period`);
-    const next = chain[i + 1];
-    if (next && !chain[i].verify(next.publicKey)) {
-      return fail('issuer_trust', `certificate ${i} is not signed by certificate ${i + 1}`);
-    }
-  }
-  const top = chain[chain.length - 1];
-  const anchor = anchors.find((a) => top.raw.equals(a.raw) || top.verify(a.publicKey));
-  return anchor
-    ? pass('issuer_trust', `chain anchored at: ${anchor.subject.replace(/\n/g, ', ')}`)
-    : fail('issuer_trust', 'issuer certificate does not chain to any trusted anchor');
-}
+const { pass, fail, skip, loadTrustAnchors, certList, checkChain } = require('./checks');
 
 function verifyIssuerAuth(issuerAuth, anchors, now) {
   const checks = [];
@@ -211,6 +184,7 @@ function verifyDocument(doc, { profile, anchors, now }) {
     );
   }
 
+  checks.push(skip('status', mget(mso, 'status') ? 'status reference present but not checked by this sample' : 'no status reference in the MSO'));
   checks.push(skip('device_auth', 'holder binding (DeviceAuth / SessionTranscript) is not verified by this sample'));
 
   return { format: 'mso_mdoc', docType, claims, checks, validity: toPlain(info) };

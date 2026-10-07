@@ -14,12 +14,12 @@
 | | Original PoC | This sample |
 |---|---|---|
 | What the QR encodes | the **whole** authorization request, including the `presentation_definition` (by value) | a short **`request_uri`** the wallet fetches (by reference) |
-| Characters in the QR | **1,141** | **≈ 160** |
-| QR version / modules per side | **27 / 125** | **8 / 49** |
+| Characters in the QR | **1,141** | **≈ 170** |
+| QR version / modules per side | **27 / 125** | **8–9 / 49–53** |
 | Quiet zone (white border) | **1 module** (spec requires **4**) | **4 modules** |
 | Image rendering | 320 px PNG scaled to 260 px (re-sampled → blurred modules) | **SVG** (vector, `image-rendering: pixelated`), no resampling |
 | Displayed size | 260 px | up to **360 px** (`min(88vw, 360px)`) + full-screen "Enlarge" |
-| Size of one module on screen (360 px-wide phone, 100 % zoom) | **≈ 1.9 px** | **≈ 5.5 px** (about 3× larger) |
+| Size of one module on screen (360 px-wide phone, 100 % zoom) | **≈ 1.9 px** | **≈ 5.2–5.5 px** (about 2.7× larger) |
 
 A mid-range phone camera must resolve each module with several pixels while the phone is held at a comfortable distance. At about 2 px per module and a 1-module quiet zone, it often cannot – zooming the page to 150 % simply makes modules bigger. Making the **payload short** (the real fix), adding the **proper quiet zone**, and rendering **crisp, larger** modules removes the need to zoom.
 
@@ -51,7 +51,10 @@ Numbers for your own profile are returned by `POST /api/session` in `qr` (`paylo
 | Wallet requires an encrypted response | It only supports `direct_post.jwt` | Not implemented in this sample (see overview §7). |
 | `400 unknown or expired state` in the server log | Session older than 10 min, server restarted (in-memory store), or two server instances | Retry; use a shared store in production. |
 | `400 response already received` | Same `state` posted twice | Expected replay protection. Start a new session. |
-| `digests: failed` | A value was changed after issuance (or the wallet re-encoded items) | Real tampering, or a wallet bug: report to the wallet vendor with the JSON from the debug view. |
+| `digests: failed` | A value was changed after issuance (mdoc: or the wallet re-encoded items; SD-JWT: a disclosure is not covered by the signed `_sd`) | Real tampering, or a wallet bug: report to the wallet vendor with the JSON from the debug view. |
+| `vct: failed` | The wallet presented a credential whose `vct` differs from the profile (birth certificate `vct` is **not defined by the rulebook**) | Set `BIRTH_CERT_VCT` to the issuer's value. |
+| `key_binding: failed – invalid: aud` / `nonce` | The wallet signed a different audience/nonce than the request's `client_id` / `nonce` (or the presentation was replayed) | Compare the KB-JWT `aud` with the `client_id` in the request object; with signed requests the audience is `x509_san_dns:<host>`. |
+| `issuer_signature: skipped` (SD-JWT) | No `x5c` in the JWT and the issuer is not in `TRUSTED_ISSUER_URLS` | Add the issuer URL (its `.well-known/jwt-vc-issuer` is then used) or ask the issuer to include `x5c`. |
 | `issuer_signature: failed` / `x5chain … invalid certificate` | Unsupported algorithm or malformed certificate chain | Inspect `issuerAuth`; the sample supports ES256/384/512. |
 | `issuer_trust: failed` | Issuer not in `TRUSTED_ISSUER_CERTS_DIR` | Add the right root certificate (IACA). |
 | `validity: failed` | Credential expired / not yet valid, or **server clock wrong** | Check `date` on the server (NTP). |
@@ -78,8 +81,8 @@ The sample is deliberately simple. Before relying on it for real citizens' data,
 - Protect the private key (secret manager, not git – `keys/` is git-ignored).
 
 ### 4.2 Verification
-- Configure **trust anchors** (`TRUSTED_ISSUER_CERTS_DIR`) and set `ALLOW_UNTRUSTED_ISSUER=false`.
-- Implement **holder binding**: verify `DeviceAuth` over the `SessionTranscript` that your wallet's OpenID4VP version defines (it incorporates your `client_id`, `response_uri`, `nonce`). Without it, a copied presentation could be replayed by someone else.
+- Configure **trust anchors** (`TRUSTED_ISSUER_CERTS_DIR`, and `TRUSTED_ISSUER_URLS` for SD-JWT issuers publishing JWKS metadata) and set `ALLOW_UNTRUSTED_ISSUER=false`.
+- **mdoc holder binding:** verify `DeviceAuth` over the `SessionTranscript` that your wallet's OpenID4VP version defines (it incorporates your `client_id`, `response_uri`, `nonce`). Without it, a copied PID presentation could be replayed by someone else. (SD-JWT: the KB-JWT *is* verified by the sample.)
 - Implement **revocation / status** checking as published by the issuer.
 - Consider **encrypted responses** (`direct_post.jwt`) – required by some wallet profiles.
 - For same-device flows, use the `response_code` / redirect pattern of OpenID4VP so a stolen session link cannot be completed by another browser.

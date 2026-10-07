@@ -21,61 +21,101 @@ async function boot() {
   return shared;
 }
 
-test('by-reference QR is short and scannable; full PID flow verifies', async (t) => {
+const post = (base, profile) => fetch(`${base}/api/session`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile })
+}).then((r) => r.json());
+const status = (base, id) => fetch(`${base}/api/session/${id}`).then((r) => r.json());
+const checkMap = (res) => Object.fromEntries(res.checks.map((c) => [c.id, c.status]));
+
+test('by-reference QR is short and scannable; PID mdoc flow verifies and discloses only what was asked', async () => {
   const server = await boot();
   const base = `http://127.0.0.1:${server.address().port}`;
   const { presentToRp } = require('../tools/mock-wallet');
 
-  const created = await (await fetch(`${base}/api/session`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile: 'pid' })
-  })).json();
-
+  const created = await post(base, 'pid');
   assert.match(created.authorizationRequestUri, /^openid4vp:\/\/\?client_id=.*request_uri=/);
   assert.ok(created.qr.payloadLength < 260, `payload ${created.qr.payloadLength}`);
   assert.ok(created.qr.version <= 9, `QR version ${created.qr.version}`);
+  assert.match(await (await fetch(base + created.qrUrl)).text(), /^<svg/);
 
-  const svg = await (await fetch(base + created.qrUrl)).text();
-  assert.match(svg, /^<svg/);
-
-  const issuer = createTestIssuer();
-  const wallet = await presentToRp(created.authorizationRequestUri, { issuer });
-  assert.strictEqual(wallet.status, 200);
-
-  const done = await (await fetch(`${base}/api/session/${created.sessionId}`)).json();
+  assert.strictEqual((await presentToRp(created.authorizationRequestUri)).status, 200);
+  const done = await status(base, created.sessionId);
   assert.strictEqual(done.status, 'verified');
-  const claims = done.results[0].claims['eu.europa.ec.eudi.pid.1'];
-  assert.strictEqual(claims.given_name, 'Test Adjovi');
-  assert.strictEqual(claims.birth_date, '1990-05-12');
-  const byId = Object.fromEntries(done.results[0].checks.map((c) => [c.id, c.status]));
-  assert.strictEqual(byId.digests, 'passed');
-  assert.strictEqual(byId.issuer_signature, 'passed');
-  assert.strictEqual(byId.device_auth, 'skipped');
+  assert.deepStrictEqual(done.results[0].claims['eu.europa.ec.eudi.pid.1'],
+    { family_name: 'KOSSI', given_name: 'Jean', birth_date: '1990-05-12' });
+  const c = checkMap(done.results[0]);
+  assert.strictEqual(c.digests, 'passed');
+  assert.strictEqual(c.issuer_signature, 'passed');
+  assert.strictEqual(c.device_auth, 'skipped');
+  assert.strictEqual(c.status, 'skipped');
 });
 
-test('birth certificate flow + tampered response is rejected + replay refused', async (t) => {
+test('PID age_over_18 shares only the boolean', async () => {
   const server = await boot();
   const base = `http://127.0.0.1:${server.address().port}`;
   const { presentToRp } = require('../tools/mock-wallet');
-  const create = async (profile) => (await fetch(`${base}/api/session`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile })
-  })).json();
-
-  const ok = await create('birth_certificate');
-  assert.strictEqual((await presentToRp(ok.authorizationRequestUri)).status, 200);
-  const done = await (await fetch(`${base}/api/session/${ok.sessionId}`)).json();
-  assert.strictEqual(done.status, 'verified');
-  assert.strictEqual(Object.values(done.results[0].claims)[0].certificate_number, 'TEST-0000-1990-0001');
-  // second post for same state must be refused
-  assert.strictEqual((await presentToRp(ok.authorizationRequestUri)).status, 400);
-
-  const bad = await create('pid');
-  const r = await presentToRp(bad.authorizationRequestUri, { tamper: true });
-  assert.strictEqual(r.status, 400);
-  const st = await (await fetch(`${base}/api/session/${bad.sessionId}`)).json();
-  assert.strictEqual(st.status, 'rejected');
+  const s = await post(base, 'pid_age_over_18');
+  assert.strictEqual((await presentToRp(s.authorizationRequestUri)).status, 200);
+  const done = await status(base, s.sessionId);
+  assert.deepStrictEqual(done.results[0].claims['eu.europa.ec.eudi.pid.1'], { age_over_18: true });
 });
 
-test.after(() => shared && shared.close());
+test('birth certificate is an SD-JWT VC: verified incl. key binding; filiation adds parents', async () => {
+  const server = await boot();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { presentToRp } = require('../tools/mock-wallet');
+
+  const bc = await post(base, 'birth_certificate');
+  assert.strictEqual((await presentToRp(bc.authorizationRequestUri)).status, 200);
+  const done = await status(base, bc.sessionId);
+  assert.strictEqual(done.status, 'verified');
+  assert.strictEqual(done.results[0].format, 'dc+sd-jwt');
+  const claims = Object.values(done.results[0].claims)[0];
+  // requested claims + the rulebook's non-selectively-disclosable metadata (SD = No)
+  assert.deepStrictEqual(Object.keys(claims).sort(),
+    ['birth_date', 'birth_record_reference', 'family_name', 'given_name', 'issuance_date', 'issuing_authority'].sort());
+  assert.strictEqual(claims.issuing_authority, 'ANIP');
+  const c = checkMap(done.results[0]);
+  for (const id of ['vct', 'digests', 'issuer_signature', 'validity', 'requested_claims', 'key_binding']) {
+    assert.strictEqual(c[id], 'passed', id);
+  }
+
+  const fil = await post(base, 'birth_certificate_filiation');
+  assert.strictEqual((await presentToRp(fil.authorizationRequestUri)).status, 200);
+  const f = Object.values((await status(base, fil.sessionId)).results[0].claims)[0];
+  assert.strictEqual(f.mother_family_name, 'AGBOSSOU');
+  assert.strictEqual(f.father_given_name, 'Koffi');
+  assert.ok(!('document_number' in f) && !('birth_place' in f), 'undisclosed claims stay hidden');
+});
+
+test('tampered credentials are rejected (mdoc and SD-JWT); a response is accepted once', async () => {
+  const server = await boot();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { presentToRp } = require('../tools/mock-wallet');
+
+  for (const profile of ['pid', 'birth_certificate']) {
+    const s = await post(base, profile);
+    assert.strictEqual((await presentToRp(s.authorizationRequestUri, { tamper: true })).status, 400, profile);
+    const st = await status(base, s.sessionId);
+    assert.strictEqual(st.status, 'rejected');
+    assert.strictEqual(checkMap(st.results[0]).digests, 'failed');
+  }
+  const ok = await post(base, 'pid');
+  assert.strictEqual((await presentToRp(ok.authorizationRequestUri)).status, 200);
+  assert.strictEqual((await presentToRp(ok.authorizationRequestUri)).status, 400); // replay
+});
+
+test('unknown profile names are refused (incl. prototype keys)', async () => {
+  const server = await boot();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const p of ['nope', 'constructor', '__proto__']) {
+    const r = await fetch(`${base}/api/session`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profile: p })
+    });
+    assert.strictEqual(r.status, 400, p);
+    await r.text(); // always drain bodies so sockets can close
+  }
+});
 
 test('health endpoints answer on /health and /healthz (Render default)', async () => {
   const server = await boot();
@@ -85,4 +125,8 @@ test('health endpoints answer on /health and /healthz (Render default)', async (
     assert.strictEqual(r.status, 200, p);
     assert.strictEqual((await r.json()).ok, true);
   }
+});
+
+test.after(() => {
+  if (shared) { shared.close(); shared.closeAllConnections(); }
 });

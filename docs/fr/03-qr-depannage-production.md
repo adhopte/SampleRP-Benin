@@ -14,12 +14,12 @@
 | | PoC d'origine | Cet exemple |
 |---|---|---|
 | Ce que le QR encode | la requête d'autorisation **complète**, avec la `presentation_definition` (par valeur) | un **`request_uri`** court que le portefeuille récupère (par référence) |
-| Caractères dans le QR | **1 141** | **≈ 160** |
-| Version QR / modules par côté | **27 / 125** | **8 / 49** |
+| Caractères dans le QR | **1 141** | **≈ 170** |
+| Version QR / modules par côté | **27 / 125** | **8–9 / 49–53** |
 | Zone de silence (bordure blanche) | **1 module** (la norme impose **4**) | **4 modules** |
 | Rendu de l'image | PNG de 320 px réduit à 260 px (ré-échantillonné → modules flous) | **SVG** (vectoriel, `image-rendering: pixelated`), sans ré-échantillonnage |
 | Taille affichée | 260 px | jusqu'à **360 px** (`min(88vw, 360px)`) + « Agrandir » plein écran |
-| Taille d'un module à l'écran (téléphone de 360 px de large, zoom 100 %) | **≈ 1,9 px** | **≈ 5,5 px** (environ 3× plus grand) |
+| Taille d'un module à l'écran (téléphone de 360 px de large, zoom 100 %) | **≈ 1,9 px** | **≈ 5,2–5,5 px** (environ 2,7× plus grand) |
 
 La caméra d'un téléphone de milieu de gamme doit résoudre chaque module avec plusieurs pixels, à une distance de tenue confortable. À environ 2 px par module et avec une zone de silence d'un seul module, elle n'y parvient souvent pas – zoomer la page à 150 % ne fait qu'agrandir les modules. Rendre la **charge utile courte** (le vrai correctif), ajouter la **zone de silence réglementaire** et afficher des modules **nets et plus grands** supprime le besoin de zoomer.
 
@@ -51,7 +51,10 @@ Les chiffres de votre propre profil sont retournés par `POST /api/session` dans
 | Le portefeuille exige une réponse chiffrée | Il ne gère que `direct_post.jwt` | Non implémenté dans cet exemple (voir aperçu §7). |
 | `400 unknown or expired state` dans le journal serveur | Session de plus de 10 min, serveur redémarré (stockage en mémoire), ou deux instances | Réessayez ; utilisez un stockage partagé en production. |
 | `400 response already received` | Même `state` posté deux fois | Protection contre le rejeu, normal. Démarrez une nouvelle session. |
-| `digests: failed` | Une valeur a été modifiée après l'émission (ou le portefeuille a ré-encodé les éléments) | Altération réelle, ou bug du portefeuille : signalez-le à l'éditeur avec le JSON de la vue de débogage. |
+| `digests: failed` | Une valeur a été modifiée après l'émission (mdoc : ou le portefeuille a ré-encodé les éléments ; SD-JWT : une divulgation n'est pas couverte par le `_sd` signé) | Altération réelle, ou bug du portefeuille : signalez-le à l'éditeur avec le JSON de la vue de débogage. |
+| `vct: failed` | Le portefeuille a présenté un justificatif dont le `vct` diffère du profil (le `vct` de l'acte de naissance n'est **pas défini par le rulebook**) | Définissez `BIRTH_CERT_VCT` avec la valeur de l'émetteur. |
+| `key_binding: failed – invalid: aud` / `nonce` | Le portefeuille a signé une audience/un nonce différent du `client_id` / `nonce` de la requête (ou la présentation a été rejouée) | Comparez l'`aud` du KB-JWT avec le `client_id` de l'objet de requête ; avec des requêtes signées l'audience est `x509_san_dns:<hôte>`. |
+| `issuer_signature: skipped` (SD-JWT) | Pas de `x5c` dans le JWT et l'émetteur n'est pas dans `TRUSTED_ISSUER_URLS` | Ajoutez l'URL de l'émetteur (son `.well-known/jwt-vc-issuer` sera utilisé) ou demandez-lui d'inclure `x5c`. |
 | `issuer_signature: failed` / `x5chain … invalid certificate` | Algorithme non géré ou chaîne de certificats mal formée | Inspectez `issuerAuth` ; l'exemple gère ES256/384/512. |
 | `issuer_trust: failed` | Émetteur absent de `TRUSTED_ISSUER_CERTS_DIR` | Ajoutez le bon certificat racine (IACA). |
 | `validity: failed` | Justificatif expiré / pas encore valide, ou **horloge du serveur fausse** | Vérifiez `date` sur le serveur (NTP). |
@@ -78,8 +81,8 @@ L'exemple est volontairement simple. Avant de l'utiliser avec les données de vr
 - Protégez la clé privée (gestionnaire de secrets, pas git – `keys/` est ignoré par git).
 
 ### 4.2 Vérification
-- Configurez des **ancres de confiance** (`TRUSTED_ISSUER_CERTS_DIR`) et définissez `ALLOW_UNTRUSTED_ISSUER=false`.
-- Implémentez la **liaison au titulaire** : vérifiez `DeviceAuth` sur le `SessionTranscript` défini par la version d'OpenID4VP de votre portefeuille (il intègre votre `client_id`, `response_uri`, `nonce`). Sans cela, une présentation copiée pourrait être rejouée par quelqu'un d'autre.
+- Configurez des **ancres de confiance** (`TRUSTED_ISSUER_CERTS_DIR`, et `TRUSTED_ISSUER_URLS` pour les émetteurs SD-JWT publiant des métadonnées JWKS) et définissez `ALLOW_UNTRUSTED_ISSUER=false`.
+- **Liaison au titulaire pour le mdoc :** vérifiez `DeviceAuth` sur le `SessionTranscript` défini par la version d'OpenID4VP de votre portefeuille (il intègre votre `client_id`, `response_uri`, `nonce`). Sans cela, une présentation de PID copiée pourrait être rejouée par quelqu'un d'autre. (SD-JWT : le KB-JWT *est* vérifié par l'exemple.)
 - Implémentez la vérification de **révocation / statut** publiée par l'émetteur.
 - Envisagez les **réponses chiffrées** (`direct_post.jwt`) – exigées par certains profils de portefeuille.
 - Pour les flux sur le même appareil, utilisez le modèle `response_code` / redirection d'OpenID4VP afin qu'un lien de session volé ne puisse pas être complété par un autre navigateur.

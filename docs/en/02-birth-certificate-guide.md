@@ -1,112 +1,122 @@
-# Guide 2 – Request a birth certificate attestation (mdoc), step by step
+# Guide 2 – Request a birth certificate attestation (SD-JWT VC), step by step
 
 **Languages:** English · [Français](../fr/02-guide-acte-de-naissance.md)
 [Overview](00-overview.md) · [PID guide](01-pid-mdoc-guide.md) · **Birth certificate guide** · [QR, troubleshooting, production](03-qr-troubleshooting-production.md)
 
-**Goal:** let a citizen present their **electronic birth certificate attestation** (an ISO 18013-5 **mdoc** issued into their wallet) to your website – for example to start a civil-status, school-enrolment or social-benefit procedure – and receive a **verified** answer on your server.
+**Goal:** let a citizen present their **birth certificate attestation** – an **SD-JWT VC** issued into their wallet – to your website (civil-status procedure, school enrolment, benefit application…) and receive a **verified** answer on your server.
 
-The protocol is **identical to the PID flow** ([Guide 1](01-pid-mdoc-guide.md)); only the *credential profile* changes. This guide lists each step with what is specific to the birth certificate.
+The flow is the same as for the PID ([Guide 1](01-pid-mdoc-guide.md)); what changes is the **credential format** (SD-JWT VC instead of mdoc), the **claims**, and the **verification** (disclosures + key-binding JWT instead of CBOR digests).
 
-> ### ⚠️ Align the identifiers with your issuer
-> The `doctype`, namespace and element names for the birth certificate are **defined by the issuing authority**, not by this sample. The values below are **placeholders** that make the sample run end-to-end with the mock wallet:
->
-> | | Placeholder in this sample | Where to change |
-> |---|---|---|
-> | `doctype` | `bj.gouv.birth_certificate.1` | `BIRTH_CERT_DOCTYPE` in `.env` or `src/profiles.js` |
-> | namespace | same as doctype | `BIRTH_CERT_NAMESPACE` |
-> | elements | `family_name`, `given_name`, `birth_date`, `birth_place`, `certificate_number`, `father_name`, `mother_name` | `requested` list in `src/profiles.js` |
->
-> Ask the issuer for the credential's **doctype, namespace and data-element identifiers** (the credential schema / issuer metadata). Step 7 shows how to discover them from a real presentation.
+> **Source of truth: the Benin PID / Birth Certificate Rulebook v1.1 (standard-namespace edition).** The birth certificate is an **SD-JWT VC**; an mdoc form is *optional* and has the same trimmed shape (docType = namespace = `eu.europa.ec.eudi.birth_certificate.1`). All claim names below are the rulebook's. Anything the rulebook flags *To confirm* is marked ⚠️ here.
+
+| | Value | Source |
+|---|---|---|
+| Format | `dc+sd-jwt` (`vc+sd-jwt` in PEX/draft requests) | rulebook: SD-JWT |
+| `vct` | `https://credentials.benin.example/birth_certificate` ⚠️ | The rulebook defines the PID `vct` (`https://credentials.benin.example/pid`) but **no birth-certificate `vct`**. This value follows the same pattern – **confirm it with the issuer** and set `BIRTH_CERT_VCT`. |
+| mdoc form (optional) | docType = namespace = `eu.europa.ec.eudi.birth_certificate.1` | rulebook, "POC Profile" tab. Enable with `BIRTH_CERT_FORMAT=mso_mdoc`. |
+| Issuing authority (claim value) | `ANIP` | rulebook |
+| Holder binding | wallet-bound (`cnf`) where supported | rulebook |
 
 ---
 
 ## Step 0 – Prerequisites
 
 - [ ] The sample running ([quick start](00-overview.md#2-quick-start-5-minutes-no-wallet-needed)) and a public HTTPS `BASE_URL`.
-- [ ] A wallet that **holds a birth certificate attestation** from your issuer (or the mock wallet for now).
-- [ ] The issuer's schema (see the box above) and, for production, its **root certificate** (IACA).
+- [ ] A wallet holding the birth certificate SD-JWT from your issuer (or the mock wallet for now).
+- [ ] From the issuer: the real **`vct`**, and how its signing key is published – an `x5c` certificate chain in the JWT header (verified against trust anchors) **or** `/.well-known/jwt-vc-issuer` metadata (see Step 6).
 
 ---
 
-## Step 1 – Decide what to ask, carefully
+## Step 1 – Choose the use case and ask only for what it needs
 
-A birth certificate contains **sensitive family data** (parents' names, place of birth). Request **only what your procedure legally requires**:
+The rulebook's **Verifier Matrix** defines the use cases. The sample provides two birth-certificate profiles (`src/profiles.js`):
 
-| Element (placeholder name) | Typical use | Ask only if… |
+| Profile id | Verifier Matrix use case | Claims requested |
 |---|---|---|
-| `family_name`, `given_name`, `birth_date` | identify the person | always needed for matching |
-| `birth_place` | civil-status procedures | the procedure needs it |
-| `certificate_number` | look up the record in your registry | you will cross-check it |
-| `father_name`, `mother_name` | filiation procedures | the procedure legally requires filiation |
+| `birth_certificate` | Birth-date corroboration (certificate side) | `family_name`, `given_name`, `birth_date`, `birth_record_reference` |
+| `birth_certificate_filiation` | Filiation proof | the above **+** `mother_family_name`, `mother_given_name`, `father_family_name`, `father_given_name` |
 
-Edit the list in `src/profiles.js`:
+Claims available in the credential (rulebook "Birth Certificate" tab):
+
+| Claim | Req. | SD | Notes |
+|---|---|---|---|
+| `family_name`, `given_name` | M | Yes | child's current names |
+| `family_name_birth`, `given_name_birth` | O | Yes | at birth, if available |
+| `birth_date` | M | Yes | |
+| `birth_place`, `birth_country`, `birth_state`, `birth_city` | O | Yes | Benin geography resolved to display names |
+| `gender` | O | Yes | ISO/IEC 5218 integer |
+| `mother_family_name`, `mother_given_name`, `father_family_name`, `father_given_name` | O | Yes | plain descriptive claims, no identifier correlation |
+| `birth_record_reference` | **M** | Yes | domestic record reference – stays on this credential |
+| `registration_date`, `registration_place`, `declarant_name`, `declarant_relationship`, `marginal_mentions` | O | Yes | `marginal_mentions` is **sensitive** |
+| `issuance_date`, `issuing_authority` | M | **No** | always visible (credential metadata) |
+| `document_number` | O | Yes | |
+
+> Request **only** what the use case needs: parents' names and marginal mentions are sensitive. The Verifier Matrix lists `portrait` and address as *not required by default*; the birth certificate does not carry them.
+
+To change what a profile asks, edit its `requested` array – for example:
 
 ```js
-birth_certificate: {
-  id: 'birth_certificate',
-  doctype: 'bj.gouv.birth_certificate.1',        // ← issuer's doctype
-  namespace: 'bj.gouv.birth_certificate.1',      // ← issuer's namespace
-  format: 'mso_mdoc',
-  requested: ['family_name', 'given_name', 'birth_date', 'birth_place',
-              'certificate_number'],             // ← drop father_name / mother_name if not needed
-  labels: { /* EN + FR labels of every element you may display */ }
-}
+birth_certificate: birthCertificate('birth_certificate',
+  ['family_name', 'given_name', 'birth_date', 'birth_record_reference'], /* title, description */)
 ```
 
-Add an `en`/`fr` entry in `labels` for each element so the result screen shows friendly names (elements without a label are displayed with their identifier). Check with your legal/data-protection team the legal basis and retention for the data you request (Beninese data-protection framework).
+Every claim you request needs an EN and FR entry in `src/labels.js` (a test checks this).
 
 ---
 
 ## Step 2 – Create a session
 
-`POST /api/session {"profile":"birth_certificate"}` – same endpoint as the PID; only the profile differs. The response contains the `openid4vp://` link, the QR (`qrUrl`) and its metrics. The QR stays **small (version 8–9)** whatever the number of requested elements, because the QR only carries the `request_uri` (see [guide 3](03-qr-troubleshooting-production.md#1-why-the-qr-code-needed-zoom-and-what-changed)); with `QR_MODE=value` the birth-certificate request alone would need ≈ 1,700 characters.
+`POST /api/session {"profile":"birth_certificate"}` – the same endpoint as for the PID. The response has the `openid4vp://` link, the QR (`qrUrl`) and its metrics. The QR stays small (version 8–9) because it only carries the `request_uri`.
 
 ---
 
 ## Step 3 – The request the wallet receives
 
-Same structure as the PID; only the descriptor changes:
+The wallet fetches `request_uri` and gets a JWT whose payload contains (PEX / draft form, `QUERY_LANGUAGE=pex`):
 
 ```json
 "presentation_definition": {
   "id": "birth_certificate-<session id>",
   "input_descriptors": [{
-    "id": "bj.gouv.birth_certificate.1",                       // = doctype
-    "format": { "mso_mdoc": { "alg": ["ES256"] } },
+    "id": "birth_certificate",
+    "format": { "vc+sd-jwt": { "sd-jwt_alg_values": ["ES256"], "kb-jwt_alg_values": ["ES256"] } },
     "constraints": {
       "limit_disclosure": "required",
       "fields": [
-        { "path": ["$['bj.gouv.birth_certificate.1']['family_name']"],        "intent_to_retain": false },
-        { "path": ["$['bj.gouv.birth_certificate.1']['certificate_number']"], "intent_to_retain": false },
-        …
+        { "path": ["$.vct"], "filter": { "type": "string", "const": "https://credentials.benin.example/birth_certificate" } },
+        { "path": ["$.family_name"] },
+        { "path": ["$.given_name"] },
+        { "path": ["$.birth_date"] },
+        { "path": ["$.birth_record_reference"] }
       ]
     }
   }]
 }
 ```
 
-With `QUERY_LANGUAGE=dcql`:
+With `QUERY_LANGUAGE=dcql` (OpenID4VP 1.0):
 
 ```json
 "dcql_query": { "credentials": [{
-  "id": "birth_certificate", "format": "mso_mdoc",
-  "meta": { "doctype_value": "bj.gouv.birth_certificate.1" },
-  "claims": [ { "path": ["bj.gouv.birth_certificate.1", "family_name"], "intent_to_retain": false }, … ]
+  "id": "birth_certificate",
+  "format": "dc+sd-jwt",
+  "meta": { "vct_values": ["https://credentials.benin.example/birth_certificate"] },
+  "claims": [ { "path": ["family_name"] }, { "path": ["given_name"] }, { "path": ["birth_date"] }, { "path": ["birth_record_reference"] } ]
 }]}
 ```
 
-If the issuer's wallet cannot find a matching credential, it will tell the citizen "no matching credential" – this is almost always a **doctype/namespace mismatch** (Step 7).
+Also in the request: `nonce`, `state`, `response_uri`, `response_mode=direct_post`, `client_id`. The wallet must disclose **only** the requested claims (plus non-selectively-disclosable metadata).
 
 ---
 
 ## Step 4 – Show the QR code and the same-device link
 
-Identical to [PID Step 4](01-pid-mdoc-guide.md#step-4--show-the-qr-code-and-a-same-device-link). To start the birth-certificate flow from your page, either call the API with the other profile or use the widget:
+Identical to [PID Step 4](01-pid-mdoc-guide.md#step-4--show-the-qr-code-and-a-same-device-link). With the widget:
 
 ```js
 SampleRpBenin.mount(document.getElementById('wallet-verify'), {
   apiBase: 'https://your-rp-backend.example.org',
-  profile: 'birth_certificate',
+  profile: 'birth_certificate',        // or 'birth_certificate_filiation'
   lang: 'fr',
   onResult: (session) => { /* session.status === 'verified' | 'rejected' */ }
 });
@@ -116,69 +126,103 @@ SampleRpBenin.mount(document.getElementById('wallet-verify'), {
 
 ## Step 5 – Receive the response
 
-Same `POST /api/response` as the PID (`vp_token` + `state`). The document inside is the attestation's **DeviceResponse**, `docType` = the birth-certificate doctype.
+`POST /api/response` with `vp_token` and `state` – exactly as for the PID. For an SD-JWT, `vp_token` is the **presentation string**:
+
+```
+<issuer-signed JWT>~<disclosure 1>~<disclosure 2>~…~<key-binding JWT>
+```
+
+(DCQL: a JSON object `{ "birth_certificate": ["<presentation>"] }` – the sample handles both.) A second response for the same session is refused.
+
+Anatomy:
+
+```
+Issuer-signed JWT   header : { alg: ES256, typ: dc+sd-jwt, x5c: [...] }
+                    payload: { iss, iat, exp, vct, cnf: {jwk}, _sd_alg: sha-256,
+                               _sd: [digest, digest, …],          ← one per selectively-disclosable claim
+                               issuance_date, issuing_authority } ← plain claims (SD = No)
+Disclosure          base64url([ salt, "family_name", "KOSSI" ])    ← one per presented claim
+KB-JWT              header : { alg: ES256, typ: kb+jwt }
+                    payload: { iat, aud, nonce, sd_hash }
+```
 
 ---
 
-## Step 6 – Verify
+## Step 6 – Verify the SD-JWT (never skip this)
 
-Same checks as the PID ([table](01-pid-mdoc-guide.md#step-6--verify-the-mdoc-never-skip-this)) – `doctype`, `digests`, `issuer_signature`, `issuer_trust`, `validity`, `requested_elements`, `device_auth` (not performed).
+`src/sdjwt.js → verifySdJwtVc` reports each check separately:
 
-Two points specific to attestations:
+| Check | What it proves | Fails when |
+|---|---|---|
+| `vct` | Right credential type | `vct` differs from the requested one |
+| `digests` | Each disclosure's SHA-256 matches a digest in the **signed** `_sd`; none unreferenced or duplicated | a value was altered or injected (`--tamper`) |
+| `issuer_signature` | The JWT signature verifies with the issuer's key | invalid signature / unsupported alg |
+| `issuer_trust` | The key belongs to a trusted issuer | `x5c` does not chain to `TRUSTED_ISSUER_CERTS_DIR`; *skipped* without anchors |
+| `validity` | `exp`, `nbf`, `iat` | expired / not yet valid |
+| `requested_claims` | Every requested claim arrived | the wallet withheld one |
+| `key_binding` | The **holder** presented it to **you**, now: KB-JWT signed with `cnf.jwk`, `aud` = your `client_id`, `nonce` = this session's, `sd_hash` covers the exact presentation | replay to another RP/session, forged or missing KB-JWT |
+| `status` | *Not performed* – status/revocation is reported as skipped | – |
 
-1. **Who is the issuer?** A birth-certificate attestation must come from the **civil-registration authority's** issuer, not just *any* issuer. Put **that** issuer's root certificate (and only it) in `TRUSTED_ISSUER_CERTS_DIR` for this profile's use, and set `ALLOW_UNTRUSTED_ISSUER=false`.
-2. **Validity.** Attestations often have a short validity or can be revoked/superseded. The sample checks `validUntil`; **revocation/status-list checking is not implemented** – ask the issuer how a status is published and add it before relying on old attestations.
+**Where does the issuer key come from?**
+1. **`x5c` in the JWT header** (what the mock issuer does): the leaf certificate's key verifies the signature, and the chain is validated against your trust anchors.
+2. **No `x5c`:** the sample fetches `<iss>/.well-known/jwt-vc-issuer` **only if `iss` is listed in `TRUSTED_ISSUER_URLS`** (comma-separated). It never fetches an arbitrary `iss` URL from a credential (SSRF protection). Otherwise the signature check is *skipped* and says why.
+
+> **A credential is only as trustworthy as `issuer_trust`.** Configure the issuer (certificate or `TRUSTED_ISSUER_URLS`) and set `ALLOW_UNTRUSTED_ISSUER=false` before relying on results.
 
 ---
 
-## Step 7 – Read the result, and discover the real identifiers
+## Step 7 – Read the result and use it on the server
 
 ```json
 {
   "status": "verified",
   "profile": "birth_certificate",
+  "format": "dc+sd-jwt",
   "results": [{
-    "docType": "bj.gouv.birth_certificate.1",
-    "claims": { "bj.gouv.birth_certificate.1": {
-      "family_name": "TEST-DOSSOU", "given_name": "Test Adjovi", "birth_date": "1990-05-12",
-      "birth_place": "Cotonou", "certificate_number": "TEST-0000-1990-0001",
-      "father_name": "TEST Koffi Dossou", "mother_name": "TEST Afi Dossou" } },
-    "checks": [ … ]
+    "format": "dc+sd-jwt",
+    "vct": "https://credentials.benin.example/birth_certificate",
+    "claims": { "https://credentials.benin.example/birth_certificate": {
+      "family_name": "KOSSI", "given_name": "Jean", "birth_date": "1990-05-12",
+      "birth_record_reference": "TEST-ACTE-1990-000123",
+      "issuance_date": "2025-02-01", "issuing_authority": "ANIP" } },
+    "checks": [ { "id": "vct", "status": "passed" }, { "id": "digests", "status": "passed" }, "…" ]
   }]
 }
 ```
 
-*(Fictitious test data generated by the mock wallet.)*
+*(Fictitious values from the mock wallet, in the style of the rulebook's "Benin Display Simulation" tab.)*
 
-**Discovering the issuer's real identifiers with a real wallet.** If the wallet answers but a check fails:
+Typical server-side uses (Verifier Matrix):
 
-- `doctype: failed – expected X, got Y` → set `BIRTH_CERT_DOCTYPE=Y`.
-- `requested_elements: failed – missing: …` → the issuer names the elements differently; open *Technical details (JSON)* in the demo page to see the element identifiers returned in `claims`, then update `requested` and `labels`.
-- If the wallet never reaches your server (no `/api/response` in the logs) the credential was probably not matched → compare the `docType` shown in the wallet's credential details with your profile.
-
-**Using the result.** Typical server-side uses:
-
-- **Cross-check with the PID**: run a PID presentation first, then a birth-certificate one in the same user flow, and compare `family_name`, `given_name`, `birth_date` (normalise case/diacritics) before accepting the application. (Asking for both in a single request is possible with a combined query, but is not implemented in this sample.)
-- **Registry lookup** by `certificate_number` to confirm the record still exists and is unchanged.
+- **Birth-date corroboration (PID + birth certificate):** run a PID presentation, then a birth-certificate one in the same user flow and compare `birth_date` (and names). The rulebook says to *prefer identifier correlation* (`personal_administrative_number` on the PID, `birth_record_reference` on the certificate) *where available*, otherwise controlled matching. The sample runs the two presentations separately; a single combined request is not implemented.
+- **Filiation proof:** use `birth_certificate_filiation`; compare parents' names to your own records; store only what you need.
+- Take the decision **on the server** where `session.status = 'verified'` is set (`server.js`, `/api/response`), never from data posted by the browser.
 
 ---
 
 ## Step 8 – Test
 
-1. `npm test` – includes a full birth-certificate flow and a tampered one.
-2. `npm run mock-wallet -- --profile birth_certificate` (add `--tamper` for a rejection).
-3. `./samples/curl-walkthrough.sh birth_certificate` – every HTTP call, step by step.
-4. Real wallet with the issuer's credential (Step 7 tells you how to fix identifiers).
+1. `npm test` – includes SD-JWT flows, key-binding failures (wrong `aud`/`nonce`), expired/tampered/forged cases.
+2. `npm run mock-wallet -- --profile birth_certificate` (and `birth_certificate_filiation`); add `--tamper` for a rejection (`digests: failed`).
+3. `./samples/curl-walkthrough.sh birth_certificate` – every HTTP call.
+4. A real wallet with the issuer's credential. If a check fails, open *Technical details (JSON)*:
+   - `vct: failed – expected X, got Y` → set `BIRTH_CERT_VCT=Y` (⚠️ the confirmation point above).
+   - `requested_claims: failed – missing: …` → the issuer's claim names differ; align `requested` with the rulebook/issuer.
+   - `key_binding: failed – invalid: aud` → the wallet used a different `client_id` as audience than the one in the request; compare them (see [troubleshooting](03-qr-troubleshooting-production.md#2-troubleshooting)).
+   - `issuer_signature: skipped` → add the issuer to `TRUSTED_ISSUER_URLS` or make the issuer include `x5c`.
+   - If the wallet shows "no matching credential", the `vct` does not match what it holds.
 
-In the demo, pick **Birth certificate** (*Acte de naissance*) on the first screen, or open the embed example at `/samples/embed/index.html?profile=birth_certificate&lang=fr`.
+### If you need the mdoc form
+Set `BIRTH_CERT_FORMAT=mso_mdoc`: the profile then requests docType/namespace `eu.europa.ec.eudi.birth_certificate.1` and is verified like the PID ([Guide 1, Step 6](01-pid-mdoc-guide.md#step-6--verify-the-mdoc-never-skip-this)).
 
 ---
 
 ## Developer checklist
 
-- [ ] `doctype`, namespace and element names come **from the issuer**, not from this sample's placeholders.
-- [ ] Only legally necessary elements (especially parents' names) are requested.
-- [ ] The civil-registration issuer's root certificate is configured; `ALLOW_UNTRUSTED_ISSUER=false`.
-- [ ] A revocation/status strategy is defined with the issuer.
+- [ ] The birth-certificate `vct` is confirmed with the issuer (`BIRTH_CERT_VCT`) – the rulebook does not define it.
+- [ ] Claim names are the rulebook's; only what the use case needs is requested (parents / marginal mentions only when legally required).
+- [ ] Issuer trust configured (`TRUSTED_ISSUER_CERTS_DIR` or `TRUSTED_ISSUER_URLS`); `ALLOW_UNTRUSTED_ISSUER=false` outside demos.
+- [ ] `key_binding` passes (so a copied presentation cannot be replayed).
+- [ ] A revocation/status strategy is agreed with the issuer (not implemented in the sample).
 - [ ] Results are processed server-side; personal data is not logged; retention is defined.
-- [ ] QR is shown ≥ 280 px, black on white, with the same-device link.
+- [ ] QR shown ≥ 280 px, black on white, with the same-device link.

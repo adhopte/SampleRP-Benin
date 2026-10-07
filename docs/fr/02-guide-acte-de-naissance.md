@@ -1,112 +1,122 @@
-# Guide 2 – Demander une attestation d'acte de naissance (mdoc), pas à pas
+# Guide 2 – Demander une attestation d'acte de naissance (SD-JWT VC), pas à pas
 
 **Langues :** [English](../en/02-birth-certificate-guide.md) · Français
 [Aperçu](00-apercu.md) · [Guide PID](01-guide-pid-mdoc.md) · **Guide acte de naissance** · [QR, dépannage, production](03-qr-depannage-production.md)
 
-**Objectif :** permettre à un citoyen de présenter son **attestation électronique d'acte de naissance** (un **mdoc** ISO 18013-5 émis dans son portefeuille) à votre site – par exemple pour démarrer une démarche d'état civil, d'inscription scolaire ou de prestation sociale – et recevoir sur votre serveur une réponse **vérifiée**.
+**Objectif :** permettre à un citoyen de présenter son **attestation d'acte de naissance** – un **SD-JWT VC** émis dans son portefeuille – à votre site (démarche d'état civil, inscription scolaire, demande de prestation…) et recevoir sur votre serveur une réponse **vérifiée**.
 
-Le protocole est **identique à celui du PID** ([Guide 1](01-guide-pid-mdoc.md)) ; seul le *profil de justificatif* change. Ce guide liste chaque étape avec ce qui est propre à l'acte de naissance.
+Le flux est le même que pour le PID ([Guide 1](01-guide-pid-mdoc.md)) ; ce qui change : le **format du justificatif** (SD-JWT VC au lieu de mdoc), les **données** et la **vérification** (divulgations + JWT de liaison de clé au lieu des empreintes CBOR).
 
-> ### ⚠️ Alignez les identifiants avec votre émetteur
-> Le `doctype`, le namespace et les noms d'éléments de l'acte de naissance sont **définis par l'autorité émettrice**, pas par cet exemple. Les valeurs ci-dessous sont **provisoires** et permettent à l'exemple de fonctionner de bout en bout avec le portefeuille simulé :
->
-> | | Valeur provisoire de cet exemple | Où la modifier |
-> |---|---|---|
-> | `doctype` | `bj.gouv.birth_certificate.1` | `BIRTH_CERT_DOCTYPE` dans `.env` ou `src/profiles.js` |
-> | namespace | identique au doctype | `BIRTH_CERT_NAMESPACE` |
-> | éléments | `family_name`, `given_name`, `birth_date`, `birth_place`, `certificate_number`, `father_name`, `mother_name` | liste `requested` dans `src/profiles.js` |
->
-> Demandez à l'émetteur le **doctype, le namespace et les identifiants d'éléments** du justificatif (schéma du justificatif / métadonnées de l'émetteur). L'étape 7 montre comment les découvrir à partir d'une vraie présentation.
+> **Source de référence : le Rulebook PID / Acte de naissance du Bénin v1.1 (édition à espace de noms standard).** L'acte de naissance est un **SD-JWT VC** ; une forme mdoc est *optionnelle*, de même forme réduite (docType = namespace = `eu.europa.ec.eudi.birth_certificate.1`). Tous les noms de données ci-dessous sont ceux du rulebook. Ce que le rulebook marque *To confirm* est signalé ⚠️ ici.
+
+| | Valeur | Source |
+|---|---|---|
+| Format | `dc+sd-jwt` (`vc+sd-jwt` dans les requêtes PEX/brouillons) | rulebook : SD-JWT |
+| `vct` | `https://credentials.benin.example/birth_certificate` ⚠️ | Le rulebook définit le `vct` du PID (`https://credentials.benin.example/pid`) mais **aucun `vct` pour l'acte de naissance**. Cette valeur suit le même modèle – **à confirmer avec l'émetteur** puis à définir dans `BIRTH_CERT_VCT`. |
+| Forme mdoc (optionnelle) | docType = namespace = `eu.europa.ec.eudi.birth_certificate.1` | rulebook, onglet « POC Profile ». Activée par `BIRTH_CERT_FORMAT=mso_mdoc`. |
+| Autorité émettrice (valeur) | `ANIP` | rulebook |
+| Liaison au titulaire | portefeuille lié (`cnf`) quand c'est pris en charge | rulebook |
 
 ---
 
 ## Étape 0 – Prérequis
 
 - [ ] L'exemple lancé ([démarrage rapide](00-apercu.md#2-démarrage-rapide-5-minutes-sans-portefeuille)) et un `BASE_URL` HTTPS public.
-- [ ] Un portefeuille qui **contient une attestation d'acte de naissance** de votre émetteur (ou le portefeuille simulé pour commencer).
-- [ ] Le schéma de l'émetteur (voir l'encadré) et, pour la production, son **certificat racine** (IACA).
+- [ ] Un portefeuille contenant l'acte de naissance SD-JWT de votre émetteur (ou le portefeuille simulé pour commencer).
+- [ ] Auprès de l'émetteur : le vrai **`vct`**, et comment sa clé de signature est publiée – une chaîne de certificats `x5c` dans l'en-tête du JWT (vérifiée par rapport aux ancres de confiance) **ou** les métadonnées `/.well-known/jwt-vc-issuer` (voir étape 6).
 
 ---
 
-## Étape 1 – Décider avec soin ce qu'on demande
+## Étape 1 – Choisir le cas d'usage et ne demander que le nécessaire
 
-Un acte de naissance contient des **données familiales sensibles** (noms des parents, lieu de naissance). Ne demandez que **ce que votre démarche exige légalement** :
+La **Verifier Matrix** du rulebook définit les cas d'usage. L'exemple fournit deux profils d'acte de naissance (`src/profiles.js`) :
 
-| Élément (nom provisoire) | Usage typique | À demander seulement si… |
+| Id du profil | Cas d'usage de la Verifier Matrix | Données demandées |
 |---|---|---|
-| `family_name`, `given_name`, `birth_date` | identifier la personne | toujours nécessaires pour le rapprochement |
-| `birth_place` | démarches d'état civil | la démarche l'exige |
-| `certificate_number` | retrouver l'acte dans votre registre | vous allez le recouper |
-| `father_name`, `mother_name` | démarches de filiation | la démarche exige légalement la filiation |
+| `birth_certificate` | Corroboration de la date de naissance (côté acte) | `family_name`, `given_name`, `birth_date`, `birth_record_reference` |
+| `birth_certificate_filiation` | Preuve de filiation | les précédentes **+** `mother_family_name`, `mother_given_name`, `father_family_name`, `father_given_name` |
 
-Modifiez la liste dans `src/profiles.js` :
+Données disponibles dans le justificatif (onglet « Birth Certificate » du rulebook) :
+
+| Donnée | Oblig. | SD | Notes |
+|---|---|---|---|
+| `family_name`, `given_name` | M | Oui | noms actuels de l'enfant |
+| `family_name_birth`, `given_name_birth` | O | Oui | à la naissance, si disponibles |
+| `birth_date` | M | Oui | |
+| `birth_place`, `birth_country`, `birth_state`, `birth_city` | O | Oui | géographie béninoise résolue en noms d'affichage |
+| `gender` | O | Oui | entier ISO/IEC 5218 |
+| `mother_family_name`, `mother_given_name`, `father_family_name`, `father_given_name` | O | Oui | données descriptives, sans corrélation d'identifiant |
+| `birth_record_reference` | **M** | Oui | référence d'acte nationale – reste sur ce justificatif |
+| `registration_date`, `registration_place`, `declarant_name`, `declarant_relationship`, `marginal_mentions` | O | Oui | `marginal_mentions` est **sensible** |
+| `issuance_date`, `issuing_authority` | M | **Non** | toujours visibles (métadonnées du justificatif) |
+| `document_number` | O | Oui | |
+
+> Ne demandez **que** ce que le cas d'usage exige : les noms des parents et les mentions marginales sont sensibles. La Verifier Matrix indique `portrait` et adresse comme *non requis par défaut* ; l'acte de naissance ne les contient pas.
+
+Pour changer ce que demande un profil, modifiez son tableau `requested`, par exemple :
 
 ```js
-birth_certificate: {
-  id: 'birth_certificate',
-  doctype: 'bj.gouv.birth_certificate.1',        // ← doctype de l'émetteur
-  namespace: 'bj.gouv.birth_certificate.1',      // ← namespace de l'émetteur
-  format: 'mso_mdoc',
-  requested: ['family_name', 'given_name', 'birth_date', 'birth_place',
-              'certificate_number'],             // ← retirez father_name / mother_name si inutiles
-  labels: { /* libellés EN + FR de chaque élément susceptible d'être affiché */ }
-}
+birth_certificate: birthCertificate('birth_certificate',
+  ['family_name', 'given_name', 'birth_date', 'birth_record_reference'], /* titre, description */)
 ```
 
-Ajoutez une entrée `en`/`fr` dans `labels` pour chaque élément afin que l'écran de résultat affiche des noms lisibles (un élément sans libellé est affiché avec son identifiant). Vérifiez avec votre équipe juridique / protection des données la base légale et la durée de conservation des données demandées (cadre béninois de protection des données).
+Chaque donnée demandée a besoin d'une entrée EN et FR dans `src/labels.js` (un test le vérifie).
 
 ---
 
 ## Étape 2 – Créer une session
 
-`POST /api/session {"profile":"birth_certificate"}` – même point d'accès que le PID ; seul le profil change. La réponse contient le lien `openid4vp://`, le QR (`qrUrl`) et ses métriques. Le QR reste **petit (version 8–9)** quel que soit le nombre d'éléments demandés, car il ne porte que le `request_uri` (voir [guide 3](03-qr-depannage-production.md#1-pourquoi-le-qr-code-nécessitait-un-zoom-et-ce-qui-a-changé)) ; avec `QR_MODE=value`, la seule requête d'acte de naissance exigerait ≈ 1 700 caractères.
+`POST /api/session {"profile":"birth_certificate"}` – même point d'accès que pour le PID. La réponse contient le lien `openid4vp://`, le QR (`qrUrl`) et ses métriques. Le QR reste petit (version 8–9) car il ne porte que le `request_uri`.
 
 ---
 
 ## Étape 3 – La requête reçue par le portefeuille
 
-Même structure que le PID ; seul le descripteur change :
+Le portefeuille récupère `request_uri` et obtient un JWT dont le contenu comprend (forme PEX / brouillon, `QUERY_LANGUAGE=pex`) :
 
 ```json
 "presentation_definition": {
   "id": "birth_certificate-<id de session>",
   "input_descriptors": [{
-    "id": "bj.gouv.birth_certificate.1",                       // = doctype
-    "format": { "mso_mdoc": { "alg": ["ES256"] } },
+    "id": "birth_certificate",
+    "format": { "vc+sd-jwt": { "sd-jwt_alg_values": ["ES256"], "kb-jwt_alg_values": ["ES256"] } },
     "constraints": {
       "limit_disclosure": "required",
       "fields": [
-        { "path": ["$['bj.gouv.birth_certificate.1']['family_name']"],        "intent_to_retain": false },
-        { "path": ["$['bj.gouv.birth_certificate.1']['certificate_number']"], "intent_to_retain": false },
-        …
+        { "path": ["$.vct"], "filter": { "type": "string", "const": "https://credentials.benin.example/birth_certificate" } },
+        { "path": ["$.family_name"] },
+        { "path": ["$.given_name"] },
+        { "path": ["$.birth_date"] },
+        { "path": ["$.birth_record_reference"] }
       ]
     }
   }]
 }
 ```
 
-Avec `QUERY_LANGUAGE=dcql` :
+Avec `QUERY_LANGUAGE=dcql` (OpenID4VP 1.0) :
 
 ```json
 "dcql_query": { "credentials": [{
-  "id": "birth_certificate", "format": "mso_mdoc",
-  "meta": { "doctype_value": "bj.gouv.birth_certificate.1" },
-  "claims": [ { "path": ["bj.gouv.birth_certificate.1", "family_name"], "intent_to_retain": false }, … ]
+  "id": "birth_certificate",
+  "format": "dc+sd-jwt",
+  "meta": { "vct_values": ["https://credentials.benin.example/birth_certificate"] },
+  "claims": [ { "path": ["family_name"] }, { "path": ["given_name"] }, { "path": ["birth_date"] }, { "path": ["birth_record_reference"] } ]
 }]}
 ```
 
-Si le portefeuille ne trouve aucun justificatif correspondant, il indiquera au citoyen « aucun justificatif correspondant » – c'est presque toujours une **différence de doctype/namespace** (étape 7).
+La requête contient aussi : `nonce`, `state`, `response_uri`, `response_mode=direct_post`, `client_id`. Le portefeuille ne doit divulguer **que** les données demandées (plus les métadonnées non divulguables sélectivement).
 
 ---
 
 ## Étape 4 – Afficher le QR code et le lien « même appareil »
 
-Identique à l'[étape 4 du PID](01-guide-pid-mdoc.md#étape-4--afficher-le-qr-code-et-un-lien--même-appareil-). Pour démarrer le flux acte de naissance depuis votre page, appelez l'API avec l'autre profil ou utilisez le widget :
+Identique à l'[étape 4 du PID](01-guide-pid-mdoc.md#étape-4--afficher-le-qr-code-et-un-lien--même-appareil-). Avec le widget :
 
 ```js
 SampleRpBenin.mount(document.getElementById('wallet-verify'), {
   apiBase: 'https://votre-backend-rp.example.org',
-  profile: 'birth_certificate',
+  profile: 'birth_certificate',        // ou 'birth_certificate_filiation'
   lang: 'fr',
   onResult: (session) => { /* session.status === 'verified' | 'rejected' */ }
 });
@@ -116,69 +126,103 @@ SampleRpBenin.mount(document.getElementById('wallet-verify'), {
 
 ## Étape 5 – Recevoir la réponse
 
-Même `POST /api/response` que pour le PID (`vp_token` + `state`). Le document contenu est la **DeviceResponse** de l'attestation, avec `docType` = le doctype de l'acte de naissance.
+`POST /api/response` avec `vp_token` et `state` – exactement comme pour le PID. Pour un SD-JWT, `vp_token` est la **chaîne de présentation** :
+
+```
+<JWT signé par l'émetteur>~<divulgation 1>~<divulgation 2>~…~<JWT de liaison de clé>
+```
+
+(DCQL : un objet JSON `{ "birth_certificate": ["<présentation>"] }` – l'exemple gère les deux.) Une seconde réponse pour la même session est refusée.
+
+Anatomie :
+
+```
+JWT de l'émetteur   en-tête : { alg: ES256, typ: dc+sd-jwt, x5c: [...] }
+                    contenu : { iss, iat, exp, vct, cnf: {jwk}, _sd_alg: sha-256,
+                                _sd: [empreinte, empreinte, …],     ← une par donnée divulgable sélectivement
+                                issuance_date, issuing_authority }   ← données en clair (SD = Non)
+Divulgation         base64url([ sel, "family_name", "KOSSI" ])       ← une par donnée présentée
+KB-JWT              en-tête : { alg: ES256, typ: kb+jwt }
+                    contenu : { iat, aud, nonce, sd_hash }
+```
 
 ---
 
-## Étape 6 – Vérifier
+## Étape 6 – Vérifier le SD-JWT (ne jamais l'omettre)
 
-Mêmes contrôles que pour le PID ([tableau](01-guide-pid-mdoc.md#étape-6--vérifier-le-mdoc-ne-jamais-lomettre)) – `doctype`, `digests`, `issuer_signature`, `issuer_trust`, `validity`, `requested_elements`, `device_auth` (non effectué).
+`src/sdjwt.js → verifySdJwtVc` rapporte chaque contrôle séparément :
 
-Deux points propres aux attestations :
+| Contrôle | Ce qu'il prouve | Échoue quand |
+|---|---|---|
+| `vct` | Bon type de justificatif | le `vct` diffère de celui demandé |
+| `digests` | Le SHA-256 de chaque divulgation correspond à une empreinte du `_sd` **signé** ; aucune non référencée ni dupliquée | une valeur a été modifiée ou injectée (`--tamper`) |
+| `issuer_signature` | La signature du JWT est valide avec la clé de l'émetteur | signature invalide / algorithme non géré |
+| `issuer_trust` | La clé appartient à un émetteur de confiance | `x5c` ne remonte pas à `TRUSTED_ISSUER_CERTS_DIR` ; *non effectué* sans ancres |
+| `validity` | `exp`, `nbf`, `iat` | expiré / pas encore valide |
+| `requested_claims` | Toutes les données demandées sont arrivées | le portefeuille en a retenu une |
+| `key_binding` | Le **titulaire** l'a présenté à **vous**, maintenant : KB-JWT signé avec `cnf.jwk`, `aud` = votre `client_id`, `nonce` = celui de la session, `sd_hash` couvre exactement la présentation | rejeu vers une autre RP/session, KB-JWT falsifié ou absent |
+| `status` | *Non effectué* – statut/révocation signalé comme ignoré | – |
 
-1. **Qui est l'émetteur ?** Une attestation d'acte de naissance doit provenir de l'émetteur de **l'autorité d'état civil**, pas de *n'importe quel* émetteur. Placez le certificat racine de **cet** émetteur (et lui seul) dans `TRUSTED_ISSUER_CERTS_DIR` pour l'usage de ce profil, et définissez `ALLOW_UNTRUSTED_ISSUER=false`.
-2. **Validité.** Les attestations ont souvent une validité courte ou peuvent être révoquées/remplacées. L'exemple contrôle `validUntil` ; la **vérification de révocation/liste de statut n'est pas implémentée** – demandez à l'émetteur comment le statut est publié et ajoutez-la avant de vous fier à d'anciennes attestations.
+**D'où vient la clé de l'émetteur ?**
+1. **`x5c` dans l'en-tête du JWT** (ce que fait l'émetteur simulé) : la clé du certificat feuille vérifie la signature, et la chaîne est validée par rapport à vos ancres de confiance.
+2. **Pas de `x5c` :** l'exemple récupère `<iss>/.well-known/jwt-vc-issuer` **uniquement si `iss` figure dans `TRUSTED_ISSUER_URLS`** (séparées par des virgules). Il ne récupère jamais une URL `iss` arbitraire provenant d'un justificatif (protection SSRF). Sinon le contrôle de signature est *non effectué* et indique pourquoi.
+
+> **Un justificatif ne vaut que par `issuer_trust`.** Configurez l'émetteur (certificat ou `TRUSTED_ISSUER_URLS`) et définissez `ALLOW_UNTRUSTED_ISSUER=false` avant de vous fier aux résultats.
 
 ---
 
-## Étape 7 – Lire le résultat et découvrir les vrais identifiants
+## Étape 7 – Lire le résultat et l'utiliser côté serveur
 
 ```json
 {
   "status": "verified",
   "profile": "birth_certificate",
+  "format": "dc+sd-jwt",
   "results": [{
-    "docType": "bj.gouv.birth_certificate.1",
-    "claims": { "bj.gouv.birth_certificate.1": {
-      "family_name": "TEST-DOSSOU", "given_name": "Test Adjovi", "birth_date": "1990-05-12",
-      "birth_place": "Cotonou", "certificate_number": "TEST-0000-1990-0001",
-      "father_name": "TEST Koffi Dossou", "mother_name": "TEST Afi Dossou" } },
-    "checks": [ … ]
+    "format": "dc+sd-jwt",
+    "vct": "https://credentials.benin.example/birth_certificate",
+    "claims": { "https://credentials.benin.example/birth_certificate": {
+      "family_name": "KOSSI", "given_name": "Jean", "birth_date": "1990-05-12",
+      "birth_record_reference": "TEST-ACTE-1990-000123",
+      "issuance_date": "2025-02-01", "issuing_authority": "ANIP" } },
+    "checks": [ { "id": "vct", "status": "passed" }, { "id": "digests", "status": "passed" }, "…" ]
   }]
 }
 ```
 
-*(Données de test fictives générées par le portefeuille simulé.)*
+*(Valeurs fictives du portefeuille simulé, dans le style de l'onglet « Benin Display Simulation » du rulebook.)*
 
-**Découvrir les vrais identifiants de l'émetteur avec un vrai portefeuille.** Si le portefeuille répond mais qu'un contrôle échoue :
+Usages typiques côté serveur (Verifier Matrix) :
 
-- `doctype: failed – expected X, got Y` → définissez `BIRTH_CERT_DOCTYPE=Y`.
-- `requested_elements: failed – missing: …` → l'émetteur nomme les éléments autrement ; ouvrez *Détails techniques (JSON)* sur la page de démo pour voir les identifiants d'éléments renvoyés dans `claims`, puis mettez à jour `requested` et `labels`.
-- Si le portefeuille n'atteint jamais votre serveur (aucun `/api/response` dans les journaux), le justificatif n'a probablement pas été reconnu → comparez le `docType` affiché dans les détails du justificatif du portefeuille avec votre profil.
-
-**Utiliser le résultat.** Usages typiques côté serveur :
-
-- **Recoupement avec le PID** : faites d'abord une présentation de PID, puis une d'acte de naissance dans le même parcours, et comparez `family_name`, `given_name`, `birth_date` (normalisez casse/accents) avant d'accepter le dossier. (Demander les deux dans une seule requête est possible avec une requête combinée, mais n'est pas implémenté dans cet exemple.)
-- **Consultation du registre** par `certificate_number` pour confirmer que l'acte existe toujours et n'a pas changé.
+- **Corroboration de la date de naissance (PID + acte de naissance) :** faites une présentation de PID, puis une d'acte de naissance dans le même parcours, et comparez `birth_date` (et les noms). Le rulebook dit de *préférer la corrélation par identifiant* (`personal_administrative_number` sur le PID, `birth_record_reference` sur l'acte) *quand c'est possible*, sinon un rapprochement contrôlé. L'exemple exécute les deux présentations séparément ; une requête combinée unique n'est pas implémentée.
+- **Preuve de filiation :** utilisez `birth_certificate_filiation` ; comparez les noms des parents à vos propres dossiers ; ne conservez que le nécessaire.
+- Prenez la décision **côté serveur**, là où `session.status = 'verified'` est positionné (`server.js`, `/api/response`), jamais à partir de données postées par le navigateur.
 
 ---
 
 ## Étape 8 – Tester
 
-1. `npm test` – inclut un flux complet d'acte de naissance et un flux altéré.
-2. `npm run mock-wallet -- --profile birth_certificate` (ajoutez `--tamper` pour un rejet).
-3. `./samples/curl-walkthrough.sh birth_certificate` – chaque appel HTTP, pas à pas.
-4. Vrai portefeuille avec le justificatif de l'émetteur (l'étape 7 explique comment corriger les identifiants).
+1. `npm test` – inclut des flux SD-JWT, des échecs de liaison de clé (mauvais `aud`/`nonce`), des cas expirés/altérés/falsifiés.
+2. `npm run mock-wallet -- --profile birth_certificate` (et `birth_certificate_filiation`) ; ajoutez `--tamper` pour un rejet (`digests: failed`).
+3. `./samples/curl-walkthrough.sh birth_certificate` – chaque appel HTTP.
+4. Un vrai portefeuille avec le justificatif de l'émetteur. Si un contrôle échoue, ouvrez *Détails techniques (JSON)* :
+   - `vct: failed – expected X, got Y` → définissez `BIRTH_CERT_VCT=Y` (⚠️ le point à confirmer ci-dessus).
+   - `requested_claims: failed – missing: …` → l'émetteur nomme les données autrement ; alignez `requested` avec le rulebook/l'émetteur.
+   - `key_binding: failed – invalid: aud` → le portefeuille a utilisé comme audience un `client_id` différent de celui de la requête ; comparez-les (voir [dépannage](03-qr-depannage-production.md#2-dépannage)).
+   - `issuer_signature: skipped` → ajoutez l'émetteur à `TRUSTED_ISSUER_URLS` ou faites inclure `x5c` par l'émetteur.
+   - Si le portefeuille affiche « aucun justificatif correspondant », le `vct` ne correspond pas à celui qu'il détient.
 
-Dans la démo, choisissez **Acte de naissance** sur le premier écran, ou ouvrez l'exemple d'intégration `/samples/embed/index.html?profile=birth_certificate&lang=fr`.
+### Si vous avez besoin de la forme mdoc
+Définissez `BIRTH_CERT_FORMAT=mso_mdoc` : le profil demande alors le docType/namespace `eu.europa.ec.eudi.birth_certificate.1` et est vérifié comme le PID ([Guide 1, étape 6](01-guide-pid-mdoc.md#étape-6--vérifier-le-mdoc-ne-jamais-lomettre)).
 
 ---
 
 ## Liste de contrôle du développeur
 
-- [ ] `doctype`, namespace et noms d'éléments viennent **de l'émetteur**, pas des valeurs provisoires de cet exemple.
-- [ ] Seuls les éléments légalement nécessaires (surtout les noms des parents) sont demandés.
-- [ ] Le certificat racine de l'émetteur d'état civil est configuré ; `ALLOW_UNTRUSTED_ISSUER=false`.
-- [ ] Une stratégie de révocation/statut est définie avec l'émetteur.
+- [ ] Le `vct` de l'acte de naissance est confirmé avec l'émetteur (`BIRTH_CERT_VCT`) – le rulebook ne le définit pas.
+- [ ] Les noms de données sont ceux du rulebook ; seul le nécessaire au cas d'usage est demandé (parents / mentions marginales uniquement si la loi l'exige).
+- [ ] Confiance dans l'émetteur configurée (`TRUSTED_ISSUER_CERTS_DIR` ou `TRUSTED_ISSUER_URLS`) ; `ALLOW_UNTRUSTED_ISSUER=false` hors démonstration.
+- [ ] `key_binding` réussit (une présentation copiée ne peut pas être rejouée).
+- [ ] Une stratégie de révocation/statut est convenue avec l'émetteur (non implémentée dans l'exemple).
 - [ ] Les résultats sont traités côté serveur ; les données personnelles ne sont pas journalisées ; la conservation est définie.
-- [ ] Le QR est affiché ≥ 280 px, noir sur blanc, avec le lien « même appareil ».
+- [ ] QR affiché ≥ 280 px, noir sur blanc, avec le lien « même appareil ».

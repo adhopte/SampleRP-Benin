@@ -41,10 +41,30 @@ test('signed request object (x509_san_dns) verifies with the x5c certificate', (
 test('DCQL query is generated for both profiles', () => {
   const { buildDcqlQuery } = require('../src/query');
   const { profiles } = require('../src/profiles');
-  const q = buildDcqlQuery(profiles.birth_certificate);
-  assert.strictEqual(q.credentials[0].format, 'mso_mdoc');
-  assert.strictEqual(q.credentials[0].meta.doctype_value, profiles.birth_certificate.doctype);
-  assert.deepStrictEqual(q.credentials[0].claims[0].path, [profiles.birth_certificate.namespace, 'family_name']);
+  const pid = buildDcqlQuery(profiles.pid);
+  assert.strictEqual(pid.credentials[0].format, 'mso_mdoc');
+  assert.strictEqual(pid.credentials[0].meta.doctype_value, 'eu.europa.ec.eudi.pid.1');
+  assert.deepStrictEqual(pid.credentials[0].claims[0].path, ['eu.europa.ec.eudi.pid.1', 'family_name']);
+  const bc = buildDcqlQuery(profiles.birth_certificate);
+  assert.strictEqual(bc.credentials[0].format, 'dc+sd-jwt');
+  assert.deepStrictEqual(bc.credentials[0].meta.vct_values, [profiles.birth_certificate.vct]);
+  assert.deepStrictEqual(bc.credentials[0].claims.map((c) => c.path[0]).includes('birth_record_reference'), true);
+});
+
+test('rulebook alignment: PID mdoc and birth certificate SD-JWT identifiers', () => {
+  const { profiles } = require('../src/profiles');
+  const { buildPresentationDefinition } = require('../src/query');
+  assert.strictEqual(profiles.pid.format, 'mso_mdoc');
+  assert.strictEqual(profiles.pid.doctype, 'eu.europa.ec.eudi.pid.1');
+  assert.strictEqual(profiles.pid.namespace, 'eu.europa.ec.eudi.pid.1');
+  assert.strictEqual(profiles.birth_certificate.format, 'sd-jwt');
+  const pd = buildPresentationDefinition(profiles.birth_certificate, 'x', 'p');
+  assert.ok('vc+sd-jwt' in pd.input_descriptors[0].format);
+  assert.ok(pd.input_descriptors[0].constraints.fields.some((f) => f.path[0] === '$.birth_record_reference'));
+  // every requested claim has an EN and FR label
+  for (const p of Object.values(profiles)) {
+    for (const c of p.requested) assert.ok(p.labels[c] && p.labels[c].en && p.labels[c].fr, `${p.id}.${c}`);
+  }
 });
 
 test('issuer trust chain: trusted anchor passes, unknown anchor fails', () => {
@@ -54,7 +74,7 @@ test('issuer trust chain: trusted anchor passes, unknown anchor fails', () => {
   const p = profiles.pid;
   const issuer = createTestIssuer();
   const other = createTestIssuer('Someone else');
-  const token = buildDeviceResponse({ docType: p.doctype, namespace: p.namespace, elements: SAMPLE_DATA.pid, issuer });
+  const token = buildDeviceResponse({ docType: p.doctype, namespace: p.namespace, elements: SAMPLE_DATA.pid, disclose: p.requested, issuer });
   const status = (anchors) =>
     verifyDeviceResponse(token, { profile: p, trustAnchors: loadTrustAnchors(anchors) })[0].checks
       .find((c) => c.id === 'issuer_trust').status;
@@ -68,11 +88,12 @@ test('expired credential and wrong doctype are flagged', () => {
   const { profiles } = require('../src/profiles');
   const issuer = createTestIssuer();
   const expired = buildDeviceResponse({
-    docType: profiles.pid.doctype, namespace: profiles.pid.namespace, elements: SAMPLE_DATA.pid, issuer,
+    docType: profiles.pid.doctype, namespace: profiles.pid.namespace, elements: SAMPLE_DATA.pid,
+    disclose: profiles.pid.requested, issuer,
     validFrom: Date.now() - 20 * 86400e3, validUntil: Date.now() - 86400e3
   });
   const c1 = verifyDeviceResponse(expired, { profile: profiles.pid })[0].checks;
   assert.strictEqual(c1.find((c) => c.id === 'validity').status, 'failed');
-  const wrong = verifyDeviceResponse(expired, { profile: profiles.birth_certificate })[0].checks;
+  const wrong = verifyDeviceResponse(expired, { profile: { ...profiles.pid, doctype: 'eu.europa.ec.eudi.birth_certificate.1' } })[0].checks;
   assert.strictEqual(wrong.find((c) => c.id === 'doctype').status, 'failed');
 });

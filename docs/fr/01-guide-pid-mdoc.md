@@ -3,6 +3,8 @@
 **Langues :** [English](../en/01-pid-mdoc-guide.md) · Français
 [Aperçu](00-apercu.md) · **Guide PID** · [Guide acte de naissance](02-guide-acte-de-naissance.md) · [QR, dépannage, production](03-qr-depannage-production.md)
 
+> **Source de référence : le Rulebook PID / Acte de naissance du Bénin v1.1 (édition à espace de noms standard).** Le PID est un **mdoc** dont le docType et le namespace sont tous deux le standard `eu.europa.ec.eudi.pid.1` – il n'y a **aucun espace de noms ni donnée propre au Bénin** ; le contenu béninois (`issuing_authority` = `ANIP`, `issuing_country` = `BJ`, noms et lieux béninois) est porté par les *valeurs*. Le PID SD-JWT est hors périmètre.
+
 **Objectif :** ajouter à votre site un bouton « Vérifier avec mon portefeuille » qui demande au citoyen son **nom, prénom(s) et date de naissance** issus de son identité numérique nationale (PID, **mdoc** ISO 18013-5), et reçoit sur votre serveur une réponse **vérifiée**.
 
 Durée : ~30 minutes avec le portefeuille simulé, puis un test avec un vrai portefeuille.
@@ -12,7 +14,8 @@ Durée : ~30 minutes avec le portefeuille simulé, puis un test avec un vrai por
 | Format | `mso_mdoc` |
 | `doctype` | `eu.europa.ec.eudi.pid.1` |
 | Namespace | `eu.europa.ec.eudi.pid.1` |
-| Éléments demandés | `family_name`, `given_name`, `birth_date` |
+| Éléments demandés (profil `pid`) | `family_name`, `given_name`, `birth_date` – cas d'usage *Vérification d'identité* du rulebook |
+| Éléments demandés (profil `pid_age_over_18`) | `age_over_18` – cas d'usage *Âge > 18* |
 | Flux | OpenID4VP, `response_mode=direct_post` |
 
 ---
@@ -21,26 +24,20 @@ Durée : ~30 minutes avec le portefeuille simulé, puis un test avec un vrai por
 
 - [ ] Node.js 18+ et l'exemple lancé : suivez le [démarrage rapide](00-apercu.md#2-démarrage-rapide-5-minutes-sans-portefeuille).
 - [ ] Une URL HTTPS publique pour le backend ([§3 de l'aperçu](00-apercu.md#3-le-rendre-accessible-à-un-vrai-portefeuille)).
-- [ ] Le portefeuille de test, et le **doctype / namespace / noms d'éléments** utilisés par votre émetteur pour le PID. Les valeurs ci-dessus sont celles par défaut du PID européen ; si votre émetteur diffère, définissez `PID_DOCTYPE` / `PID_NAMESPACE` dans `.env`.
+- [ ] Le portefeuille de test. Les identifiants sont fixés par le rulebook ; ne surchargez `PID_DOCTYPE` / `PID_NAMESPACE` dans `.env` que si l'écosystème les change.
 
 ---
 
 ## Étape 1 – Décider ce qu'on demande (minimisation des données)
 
-Ouvrez `src/profiles.js`. Le profil PID est le seul endroit qui décrit le justificatif :
+Ouvrez `src/profiles.js`. Les profils PID sont le seul endroit qui décrit ce qui est demandé :
 
 ```js
-pid: {
-  id: 'pid',
-  doctype: 'eu.europa.ec.eudi.pid.1',
-  namespace: 'eu.europa.ec.eudi.pid.1',
-  format: 'mso_mdoc',
-  requested: ['family_name', 'given_name', 'birth_date'],   // ← ne demandez QUE le nécessaire
-  labels: { ... }  // noms EN/FR affichés sur l'écran de résultat
-}
+pid: pid('pid', ['family_name', 'given_name', 'birth_date'], /* titre, description */),        // Vérification d'identité
+pid_age_over_18: pid('pid_age_over_18', ['age_over_18'], /* titre, description */),            // Âge > 18
 ```
 
-Demandez le **minimum** nécessaire à votre service. Pour un contrôle « majeur », préférez un élément oui/non comme `age_over_18` (si votre émetteur le fournit) plutôt que la date de naissance. Chaque élément ajouté apparaît sur l'écran de consentement du citoyen. Les éléments sont envoyés avec `intent_to_retain: false` ; mettez `true` uniquement si vous conservez réellement la valeur, et expliquez pourquoi au citoyen.
+Demandez le **minimum** nécessaire à votre service – la Verifier Matrix du rulebook indique de **préférer `age_over_18` à `birth_date`** pour un contrôle d'âge, de ne demander `nationality` que si nécessaire et `personal_administrative_number` (très sensible) que si requis ; `portrait` et `resident_address` ne sont *pas demandés par défaut*. Éléments demandables (onglet « PID mdoc » du rulebook) : `family_name`, `family_name_birth`, `given_name`, `birth_date`, `age_over_18`, `age_over_NN`, `age_in_years`, `age_birth_year`, `birth_place`, `birth_country`, `birth_state`, `birth_city`, `resident_address`, `nationality`, `gender`, `portrait`, `document_number`, `issuance_date`, `expiry_date`, `issuing_authority`, `issuing_country`, `personal_administrative_number`. Ajoutez une donnée dans `requested` et vérifiez qu'elle a ses libellés EN/FR dans `src/labels.js`. Chaque élément ajouté apparaît sur l'écran de consentement du citoyen. Les éléments sont envoyés avec `intent_to_retain: false` ; mettez `true` uniquement si vous conservez réellement la valeur, et expliquez pourquoi au citoyen.
 
 ---
 
@@ -178,6 +175,7 @@ L'exemple répond `200 {}` en cas de succès et `400 {"error":"invalid_request",
 | `issuer_trust` | Ce certificat remonte à **un émetteur de confiance** (IACA dans `TRUSTED_ISSUER_CERTS_DIR`) | émetteur inconnu. *Non effectué* si aucune ancre n'est configurée |
 | `validity` | `validFrom ≤ maintenant ≤ validUntil` | expiré / pas encore valide |
 | `requested_elements` | Tous les éléments demandés ont été renvoyés | le portefeuille en a retenu un |
+| `status` | *Non effectué* – révocation/statut (rulebook : « valider … statut ») signalé comme ignoré | – |
 | `device_auth` | *Non effectué par l'exemple* – liaison au titulaire | – |
 
 > **Un justificatif ne vaut que par `issuer_trust`.** Sans ancres de confiance configurées, l'exemple indique que la signature est valide mais **ne peut pas savoir qui a signé** ; n'importe qui pourrait présenter un mdoc fabriqué. Obtenez le(s) certificat(s) racine de l'émetteur et définissez `TRUSTED_ISSUER_CERTS_DIR` + `ALLOW_UNTRUSTED_ISSUER=false` avant de faire confiance aux résultats.
@@ -209,7 +207,7 @@ La page interroge `GET /api/session/:id`. Un résultat vérifié ressemble à :
   "results": [{
     "docType": "eu.europa.ec.eudi.pid.1",
     "claims": { "eu.europa.ec.eudi.pid.1": {
-      "family_name": "TEST-DOSSOU", "given_name": "Test Adjovi", "birth_date": "1990-05-12" } },
+      "family_name": "KOSSI", "given_name": "Jean", "birth_date": "1990-05-12" } },
     "checks": [
       { "id": "doctype", "status": "passed" },
       { "id": "digests", "status": "passed" },
@@ -217,6 +215,7 @@ La page interroge `GET /api/session/:id`. Un résultat vérifié ressemble à :
       { "id": "issuer_trust", "status": "skipped", "detail": "no trust anchors configured" },
       { "id": "validity", "status": "passed" },
       { "id": "requested_elements", "status": "passed" },
+      { "id": "status", "status": "skipped" },
       { "id": "device_auth", "status": "skipped" }
     ]
   }]
@@ -232,7 +231,7 @@ La page interroge `GET /api/session/:id`. Un résultat vérifié ressemble à :
 ## Étape 8 – Tester
 
 1. **Tests unitaires/flux :** `npm test`.
-2. **Portefeuille simulé** (sans téléphone) : `npm run mock-wallet -- --profile pid` ; ajoutez `--tamper` pour confirmer qu'une valeur modifiée est **rejetée** (`digests: failed`).
+2. **Portefeuille simulé** (sans téléphone) : `npm run mock-wallet -- --profile pid` (ou `pid_age_over_18` ; le simulateur ne divulgue que ce qui est demandé, avec des valeurs fictives de style béninois) ; ajoutez `--tamper` pour confirmer qu'une valeur modifiée est **rejetée** (`digests: failed`).
 3. **Vrai portefeuille :** déployez/tunnel avec un `BASE_URL` public, ouvrez la page *via cette URL*, scannez le QR avec le portefeuille. Si le portefeuille affiche une erreur avant l'écran de consentement, consultez le [tableau de dépannage](03-qr-depannage-production.md#2-dépannage).
 4. **Vérifier ce que votre émetteur envoie réellement :** si `doctype` ou `requested_elements` échouent, ouvrez *Détails techniques (JSON)* – il montre le `docType` et les noms d'éléments renvoyés par le portefeuille. Alignez `src/profiles.js` (ou les variables `PID_*`).
 

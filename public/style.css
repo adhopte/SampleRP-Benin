@@ -52,6 +52,7 @@ button.card {
   display: flex; flex-direction: column; gap: 4px; font-size: 0.95rem;
 }
 button.card:hover, button.card:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); }
+button.card small { color: var(--accent); font-weight: 600; font-size: 0.75rem; }
 button.card span { color: var(--muted); font-size: 0.88rem; }
 .hint { color: var(--muted); font-size: 0.85rem; margin: 8px 0; }
 .scan { font-weight: 600; margin: 8px 0; }

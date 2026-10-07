@@ -9,7 +9,8 @@ const { randomUUID } = require('crypto');
 const config = require('./src/config');
 const { profiles } = require('./src/profiles');
 const { buildRequestParams, buildDeepLink, buildRequestObject, renderQr } = require('./src/request');
-const { verifyDeviceResponse, loadTrustAnchors } = require('./src/mdoc');
+const { loadTrustAnchors } = require('./src/checks');
+const { verifyPresentations } = require('./src/verify');
 
 const app = express();
 app.disable('x-powered-by');
@@ -56,10 +57,17 @@ function trustAnchors() {
 }
 const anchors = trustAnchors();
 
+app.get('/api/profiles', (req, res) =>
+  res.json(Object.values(profiles).map((p) => ({
+    id: p.id, credential: p.credential, format: p.format, title: p.title, description: p.description, requested: p.requested
+  })))
+);
+
 // ---- Step 1: create a session, return the QR / deep link -------------------
 
 app.post('/api/session', (req, res) => {
-  const profile = profiles[(req.body && req.body.profile) || 'pid'];
+  const wanted = (req.body && req.body.profile) || 'pid';
+  const profile = Object.hasOwn(profiles, wanted) ? profiles[wanted] : undefined;
   if (!profile) return res.status(400).json({ error: 'unknown_profile', profiles: Object.keys(profiles) });
   pruneSessions();
   if (sessions.size >= config.maxSessions) return res.status(503).json({ error: 'too_many_sessions' });
@@ -120,7 +128,7 @@ function collectTokens(vpToken) {
   return [];
 }
 
-app.post('/api/response', (req, res) => {
+app.post('/api/response', async (req, res) => {
   const { vp_token: vpToken, state } = req.body || {};
   const session = state && sessions.get(byState.get(state));
   if (!session) {
@@ -138,7 +146,12 @@ app.post('/api/response', (req, res) => {
 
   try {
     const profile = profiles[session.profile];
-    const results = tokens.flatMap((t) => verifyDeviceResponse(t, { profile, trustAnchors: anchors }));
+    const results = await verifyPresentations(tokens, {
+      profile,
+      trustAnchors: anchors,
+      expected: { aud: session.params.client_id, nonce: session.nonce },
+      issuerAllowlist: config.trustedIssuerUrls
+    });
     const checks = results.flatMap((r) => r.checks);
     const failed = checks.filter((c) => c.status === 'failed');
     const trustMissing = !config.allowUntrustedIssuer && !checks.some((c) => c.id === 'issuer_trust' && c.status === 'passed');
@@ -170,6 +183,8 @@ app.get('/api/session/:id', (req, res) => {
     profile: s.profile,
     error: s.error,
     labels: profile.labels,
+    format: profile.format,
+    requested: profile.requested,
     results: s.results
   });
 });

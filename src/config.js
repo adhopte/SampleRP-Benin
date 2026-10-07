@@ -23,6 +23,9 @@ const config = {
   signingCertFile: process.env.RP_SIGNING_CERT_FILE || '',
   // Optional: directory of PEM files for issuer (IACA) trust anchors.
   trustedIssuersDir: process.env.TRUSTED_ISSUER_CERTS_DIR || '',
+  // Comma-separated issuer URLs (the SD-JWT `iss`) whose /.well-known/jwt-vc-issuer metadata may be
+  // fetched when the credential carries no x5c header. Anything else is never fetched.
+  trustedIssuerUrls: (process.env.TRUSTED_ISSUER_URLS || '').split(',').map((s) => s.trim()).filter(Boolean),
   // Do not fail the verification if the issuer signature/trust cannot be checked.
   // Keep "true" for demos, set "false" for anything resembling production.
   allowUntrustedIssuer: process.env.ALLOW_UNTRUSTED_ISSUER !== 'false',
